@@ -2,9 +2,9 @@ use std::io;
 use std::io::prelude::*;
 
 enum Move {
-    Down(i32),
-    Up(i32),
-    Forward(i32)
+    Down(i64),
+    Up(i64),
+    Forward(i64)
 }
 
 fn parse_move(s: &str) -> Result<Move, String> {
@@ -12,7 +12,7 @@ fn parse_move(s: &str) -> Result<Move, String> {
     if words.len() != 2 {
 	Err(format!("expected 2 words, got {}: {}", words.len(), s))
     } else {
-	match words[1].parse::<i32>() {
+	match words[1].parse::<i64>() {
 	    Err(e) => Err(format!("expected a number, got {}: {}", words[1], e)),
 	    Ok(n) => {
 		match words[0] {
@@ -26,21 +26,49 @@ fn parse_move(s: &str) -> Result<Move, String> {
     }
 }
 
-fn move_sub(pos: (i32, i32), m: &Move) -> (i32, i32) {
-    let (h, v) = pos;
-    match m {
-	Move::Down(n) => (h, v + n),
-	Move::Up(n) => (h, v - n),
-	Move::Forward(n) => (h + n, v),
+fn part1(moves: &[Move]) {
+    fn move_sub(pos: (i64, i64), m: &Move) -> (i64, i64) {
+	let (h, v) = pos;
+	match m {
+	    Move::Down(n) => (h, v + n),
+	    Move::Up(n) => (h, v - n),
+	    Move::Forward(n) => (h + n, v),
+	}
     }
+
+    println!("Day 02 part 1: {}", {
+	let (h, v) = moves.iter().fold((0, 0), move_sub);
+	h * v
+    });
 }
+
+
+fn part2(moves: &[Move]) {
+    struct Pos {
+	aim: i64,
+	h: i64,
+	v: i64,
+    }
+    fn move_sub(pos: Pos, m: &Move) -> Pos {
+	match m {
+	    Move::Down(x) => Pos{ aim: pos.aim + x, h: pos.h, v: pos.v },
+	    Move::Up(x) => Pos{ aim: pos.aim - x, h: pos.h, v: pos.v },
+	    Move::Forward(x) => Pos { aim: pos.aim, h: pos.h + x, v: pos.v + pos.aim * x },
+	}
+    }
+
+    println!("Day 02 part 2: {}", {
+	let start = Pos { aim: 0, h: 0, v: 0 };
+	let end = moves.iter().fold(start, move_sub);
+	end.h * end.v
+    });
+}
+
 
 fn main() {
     let moves: Vec<Move> = io::BufReader::new(io::stdin()).lines()
     	.map(|s| parse_move(&s.unwrap()).expect("valid input"))
 	.collect();
-
-    let start = (0_i32, 0_i32);
-    let finish = moves.iter().fold(start, |acc, this_move| move_sub(acc, this_move));
-    println!("Day 02 part 1: {}", finish.0 * finish.1);
+    part1(&moves);
+    part2(&moves);
 }
