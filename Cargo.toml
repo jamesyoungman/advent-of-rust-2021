@@ -10,3 +10,5 @@ authors = ["James Youngman <james@youngman.org>"]
 
 [[bin]]
 name = "day01"
+[[bin]]
+name = "day02"
