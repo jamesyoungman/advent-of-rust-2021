@@ -6,6 +6,8 @@ fn parse_binary(s: &str) -> i32 {
     i32::from_str_radix(s, 2).expect("valid input")
 }
 
+// The instructions number bits starting from the left.  That is, the
+// most significant bit.
 fn mask(bitwidth: i32, bitpos: i32) -> i32 {
     1 << (bitwidth - bitpos - 1)
 }
@@ -19,19 +21,11 @@ fn most_popular(bitwidth: i32, bitpos: i32, readings: &[i32]) -> Option<bool> {
         }
     }
     let count0 = readings.len() - count1;
-    let result: Option<bool> = match count1.cmp(&count0) {
-        Ordering::Greater => Some(true),
-        Ordering::Less => Some(false),
-        Ordering::Equal => None,
-    };
-    //println!(
-    //	"most_popular: bit position {}: count of 1s: {}, count of 0s: {}, most popular: {:?}",
-    //	bitpos,
-    //	count1,
-    //	count0,
-    //	result
-    //);
-    result
+    match count1.cmp(&count0) {
+        Ordering::Greater => Some(true), // 1 is more popular than 0
+        Ordering::Less => Some(false),	 // 0 is more popular than 1
+        Ordering::Equal => None,	 // equally popular
+    }
 }
 
 fn part1(bitwidth: i32, readings: &[i32]) {
@@ -41,7 +35,6 @@ fn part1(bitwidth: i32, readings: &[i32]) {
             gamma |= mask(bitwidth, bitpos);
         }
     }
-    //println!("Part 1: gamma={:b}={}", gamma, gamma);
     let all_bits: i32 = (1 << bitwidth) - 1;
     let epsilon = (!gamma) & all_bits;
     println!("Part 1: {}*{} = {}", gamma, epsilon, gamma * epsilon);
@@ -63,20 +56,12 @@ fn filter(bitwidth: i32, readings: &[i32], retain_most_popular: bool) -> i32 {
                 None => retain_most_popular,
             }
         };
-        //println!("filter: bit pos {}: retaining readings with value {}",
-        //	 bitpos, if expected { 1 } else { 0 });
+        let mask = mask(bitwidth, bitpos);
         let want = |x: &i32| {
-            let mask = mask(bitwidth, bitpos);
             let got = x & mask == mask;
             expected == got
         };
-        //for n in &remaining {
-        //    println!("before filtering: {:05b}", n);
-        //}
         remaining.retain(want);
-        //for n in &remaining {
-        //    println!("after filtering: retained: {:05b}", n);
-        //}
         if remaining.len() == 1 {
             break;
         }
