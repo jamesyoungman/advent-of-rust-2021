@@ -50,16 +50,16 @@ fn part2(moves: &[Move]) {
         match m {
             Move::Down(x) => Pos {
                 aim: pos.aim + x,
-		..pos
+                ..pos
             },
             Move::Up(x) => Pos {
                 aim: pos.aim - x,
-		..pos
+                ..pos
             },
             Move::Forward(x) => Pos {
                 h: pos.h + x,
                 v: pos.v + pos.aim * x,
-		..pos
+                ..pos
             },
         }
     }
