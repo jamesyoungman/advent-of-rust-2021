@@ -23,8 +23,8 @@ fn most_popular(bitwidth: i32, bitpos: i32, readings: &[i32]) -> Option<bool> {
     let count0 = readings.len() - count1;
     match count1.cmp(&count0) {
         Ordering::Greater => Some(true), // 1 is more popular than 0
-        Ordering::Less => Some(false),	 // 0 is more popular than 1
-        Ordering::Equal => None,	 // equally popular
+        Ordering::Less => Some(false),   // 0 is more popular than 1
+        Ordering::Equal => None,         // equally popular
     }
 }
 
