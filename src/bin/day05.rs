@@ -1,4 +1,4 @@
-use std::cmp::{max, min};
+use std::cmp::{max, min, Ordering};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::io;
@@ -35,7 +35,7 @@ impl TryFrom<&str> for Point {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum LineType {
     Horizontal,
     Vertical,
@@ -60,32 +60,28 @@ impl Line {
     }
 
     pub fn draw(&self) -> Vec<Point> {
-        let ymin = min(self.from.y, self.to.y);
-        let ymax = max(self.from.y, self.to.y);
-        let xmin = min(self.from.x, self.to.x);
-        let xmax = max(self.from.x, self.to.x);
-        match self.category() {
-            LineType::Vertical => (ymin..=ymax).map(|y| Point { x: self.from.x, y }).collect(),
-            LineType::Horizontal => (xmin..=xmax).map(|x| Point { x, y: self.from.y }).collect(),
-            LineType::Other => {
-                fn delta(start: i32, end: i32) -> i32 {
-                    if start < end {
-                        1
-                    } else {
-                        -1
-                    }
-                }
-                let xdelta = delta(self.from.x, self.to.x);
-                let ydelta = delta(self.from.y, self.to.y);
-                (ymin..=ymax)
-                    .enumerate()
-                    .map(|(t, _y)| Point {
-                        x: self.from.x + t as i32 * xdelta,
-                        y: self.from.y + t as i32 * ydelta,
-                    })
-                    .collect()
+        fn delta(start: i32, end: i32) -> i32 {
+            match start.cmp(&end) {
+                Ordering::Equal => 0,
+                Ordering::Less => 1,
+                Ordering::Greater => -1,
             }
         }
+        let xdelta = delta(self.from.x, self.to.x);
+        let ydelta = delta(self.from.y, self.to.y);
+        // sep is the distance between the endpoints, in either the
+        // horizontal or vertical direction, as opposed to the actual
+        // length of the line.
+        let sep = max(
+            (self.from.x - self.to.x).abs(),
+            (self.from.y - self.to.y).abs(),
+        );
+        (0..=sep)
+            .map(|t| Point {
+                x: self.from.x + t as i32 * xdelta,
+                y: self.from.y + t as i32 * ydelta,
+            })
+            .collect()
     }
 }
 
@@ -162,22 +158,18 @@ impl From<&Vec<Line>> for Grid {
                 grid.update_corners(&point);
                 grid.draw(&point);
             }
-            //println!("after drawing {}:\n{}", line, grid);
         }
         grid
     }
 }
 
-fn count_overlaps(part_num: i32, lines: &Vec<Line>) {
+fn count_overlaps(part_num: i32, lines: &[Line]) {
     let kept_lines: Vec<Line> = match part_num {
-        1 => {
-            let mut hv_lines: Vec<Line> = lines.to_vec();
-            hv_lines.retain(|line| match line.category() {
-                LineType::Horizontal | LineType::Vertical => true,
-                LineType::Other => false,
-            });
-            hv_lines
-        }
+        1 => lines
+            .iter()
+            .filter(|line| line.category() != LineType::Other)
+            .cloned()
+            .collect(),
         2 => lines.to_vec(),
         _ => {
             panic!("part {}?", part_num);
@@ -185,12 +177,7 @@ fn count_overlaps(part_num: i32, lines: &Vec<Line>) {
     };
     let grid = Grid::from(&kept_lines);
     println!("Part {}:\n{}", part_num, &grid);
-    let mut total: usize = 0;
-    for (_p, count) in grid.points.iter() {
-        if *count > 1 {
-            total += 1;
-        }
-    }
+    let total = grid.points.values().filter(|count| **count > 1).count();
     println!("Day 5 part {}: {}", part_num, total);
 }
 
