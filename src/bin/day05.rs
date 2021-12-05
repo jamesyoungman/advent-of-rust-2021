@@ -60,20 +60,30 @@ impl Line {
     }
 
     pub fn draw(&self) -> Vec<Point> {
+        let ymin = min(self.from.y, self.to.y);
+        let ymax = max(self.from.y, self.to.y);
+        let xmin = min(self.from.x, self.to.x);
+        let xmax = max(self.from.x, self.to.x);
         match self.category() {
-            LineType::Vertical => {
-                let ymin = min(self.from.y, self.to.y);
-                let ymax = max(self.from.y, self.to.y);
-                (ymin..=ymax).map(|y| Point { x: self.from.x, y }).collect()
-            }
-            LineType::Horizontal => {
-                let xmin = min(self.from.x, self.to.x);
-                let xmax = max(self.from.x, self.to.x);
-                (xmin..=xmax).map(|x| Point { x, y: self.from.y }).collect()
-            }
+            LineType::Vertical => (ymin..=ymax).map(|y| Point { x: self.from.x, y }).collect(),
+            LineType::Horizontal => (xmin..=xmax).map(|x| Point { x, y: self.from.y }).collect(),
             LineType::Other => {
-                // In part 1, we only consider horizontal and vertical lines
-                vec![]
+                fn delta(start: i32, end: i32) -> i32 {
+                    if start < end {
+                        1
+                    } else {
+                        -1
+                    }
+                }
+                let xdelta = delta(self.from.x, self.to.x);
+                let ydelta = delta(self.from.y, self.to.y);
+                (ymin..=ymax)
+                    .enumerate()
+                    .map(|(t, _y)| Point {
+                        x: self.from.x + t as i32 * xdelta,
+                        y: self.from.y + t as i32 * ydelta,
+                    })
+                    .collect()
             }
         }
     }
@@ -158,14 +168,51 @@ impl From<&Vec<Line>> for Grid {
     }
 }
 
-fn part1(g: &Grid) {
+fn count_overlaps(part_num: i32, lines: &Vec<Line>) {
+    let kept_lines: Vec<Line> = match part_num {
+        1 => {
+            let mut hv_lines: Vec<Line> = lines.to_vec();
+            hv_lines.retain(|line| match line.category() {
+                LineType::Horizontal | LineType::Vertical => true,
+                LineType::Other => false,
+            });
+            hv_lines
+        }
+        2 => lines.to_vec(),
+        _ => {
+            panic!("part {}?", part_num);
+        }
+    };
+    let grid = Grid::from(&kept_lines);
+    println!("Part {}:\n{}", part_num, &grid);
     let mut total: usize = 0;
-    for (_p, count) in g.points.iter() {
+    for (_p, count) in grid.points.iter() {
         if *count > 1 {
             total += 1;
         }
     }
-    println!("Day 5 part 1: {}", total);
+    println!("Day 5 part {}: {}", part_num, total);
+}
+
+#[test]
+fn test_diagonal() {
+    let line1 = Line {
+        from: Point { x: 1, y: 1 },
+        to: Point { x: 3, y: 3 },
+    };
+    let points = line1.draw();
+    assert_eq!(Point { x: 1, y: 1 }, points[0]);
+    assert_eq!(Point { x: 2, y: 2 }, points[1]);
+    assert_eq!(Point { x: 3, y: 3 }, points[2]);
+
+    let line2 = Line {
+        from: Point { x: 9, y: 7 },
+        to: Point { x: 7, y: 9 },
+    };
+    let points = line2.draw();
+    assert_eq!(Point { x: 9, y: 7 }, points[0]);
+    assert_eq!(Point { x: 8, y: 8 }, points[1]);
+    assert_eq!(Point { x: 7, y: 9 }, points[2]);
 }
 
 fn main() {
@@ -180,7 +227,6 @@ fn main() {
         })
         .collect();
 
-    let grid = Grid::from(&lines);
-    println!("{}", &grid);
-    part1(&grid);
+    count_overlaps(1, &lines);
+    count_overlaps(2, &lines);
 }
