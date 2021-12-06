@@ -1,51 +1,64 @@
 use std::io;
 use std::io::prelude::*;
 
-
-fn generation(current: Vec<u32>) -> Vec<u32> {
-    let births = current.iter().filter(|&n| *n == 0).count();
-    let nextlen = current.len() + births;
-    let mut next: Vec<u32> = Vec::with_capacity(nextlen);
-    for n in current {
-	next.push(match n {
-	    0 => 6,
-	    _ => n - 1,
-	});
-    }
-    next.resize(nextlen, 8);
-    next
+#[derive(Debug)]
+struct School {
+    population_by_days: [usize; 9]
 }
 
-fn show(day: usize, population: &[u32]) {
-    println!(
-	"After {:2} {}: {} (total {} fish)",
-	day,
-	if day == 1 { "day" } else { "days" },
-	population.iter()
-	    .map(u32::to_string)
-	    .collect::<Vec<String>>()
-	    .join(","),
-	population.iter().count(),
-    );
-}
-
-fn compute(mut population: Vec<u32>,
-	   days: usize) -> usize {
-    for day in 1..=days {
-	population = generation(population);
-	if day < 19 {
-	    show(day, &population);
+impl School {
+    fn new(counters: &[u8]) -> School {
+	let mut pop: [usize; 9] = [0; 9];
+	for counter in counters {
+	    pop[*counter as usize] += 1;
+	}
+	School {
+	    population_by_days: pop,
 	}
     }
-    population.len()
+
+    fn a_day_passes(&mut self) {
+	let births = self.population_by_days[0];
+	self.population_by_days[0] = self.population_by_days[1];
+	self.population_by_days[1] = self.population_by_days[2];
+	self.population_by_days[2] = self.population_by_days[3];
+	self.population_by_days[3] = self.population_by_days[4];
+	self.population_by_days[4] = self.population_by_days[5];
+	self.population_by_days[5] = self.population_by_days[6];
+	self.population_by_days[6] = self.population_by_days[7] + births;
+	self.population_by_days[7] = self.population_by_days[8];
+	self.population_by_days[8] = births;
+    }
+
+    fn compute(&mut self, days: usize) -> usize {
+	for _day in 1..=days {
+	    self.a_day_passes();
+	}
+	self.fish_count()
+    }
+
+    fn fish_count(&self) -> usize {
+	self.population_by_days.iter().sum()
+    }
 }
 
-fn part1(population: Vec<u32>) {
+fn part1(population: &[u8]) {
     const DAYS: usize = 80;
+    let mut school = School::new(population);
     println!(
 	"Day 6 part 1: after {} days, total population is {}",
 	DAYS,
-	compute(population, DAYS),
+	school.compute(DAYS),
+    );
+}
+
+fn part2(population: &[u8]) {
+    const DAYS: usize = 256;
+    let mut school = School::new(population);
+    println!(
+	"Day 6 part 2: after {} days, total population is {}",
+	DAYS,
+	school.compute(DAYS),
     );
 }
 
@@ -59,13 +72,14 @@ fn main() {
 		panic!("empty input");
 	    }
 	};
-    let population: Vec<u32> = match first_line.split(',')
-	.map(|s| s.parse::<u32>())
+    let population: Vec<u8> = match first_line.split(',')
+	.map(|s| s.parse::<u8>())
 	.collect() {
 	    Err(e) => {
 		panic!("failed to parse integer in {}: {}", first_line, e);
 	    }
 	    Ok(items) => items,
 	};
-    part1(population.clone());
+    part1(&population);
+    part2(&population);
 }
