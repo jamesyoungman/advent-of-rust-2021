@@ -65,7 +65,7 @@ impl HeightMap {
 	let h = self.heights[(r, c)];
 	for neighbour in neighbours(r, c, nrows, ncols) {
 	    let neighbour_height: i32 = self.heights[neighbour];
-	    if neighbour_height < h {
+	    if neighbour_height <= h {
 		return false;
 	    }
 	}
