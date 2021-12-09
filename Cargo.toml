@@ -7,6 +7,7 @@ authors = ["James Youngman <james@youngman.org>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ndarray = "0.15"		# day 09
 
 [[bin]]
 name = "day01"
@@ -24,3 +25,5 @@ name = "day06"
 name = "day07"
 [[bin]]
 name = "day08"
+[[bin]]
+name = "day09"
