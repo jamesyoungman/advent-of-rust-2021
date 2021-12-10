@@ -70,7 +70,7 @@ fn completing_chars_helper(mut s: String) -> Result<String, ()> {
         }
         let mut changed = false;
         for (open, close) in [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')] {
-            if let Some(_) = not_matched.strip_suffix(close) {
+            if not_matched.strip_suffix(close).is_some() {
                 return Err(()); // Syntax error
             }
             if let Some(head) = not_matched.strip_suffix(open) {
@@ -127,7 +127,7 @@ fn autocomplete_score(s: &str) -> Option<u64> {
 }
 
 fn part1(lines: &[String]) {
-    let total_score: u32 = lines.iter().map(|line| syntax_error_score(&line)).sum();
+    let total_score: u32 = lines.iter().map(|line| syntax_error_score(line)).sum();
     println!("Day 10 part 1: {}", total_score);
 }
 
@@ -136,7 +136,7 @@ fn part2(lines: &[String]) {
         .iter()
         .filter_map(|line| autocomplete_score(line))
         .collect();
-    scores.sort();
+    scores.sort_unstable();
     let middle_score = scores[scores.len() / 2];
     println!("Day 10 part 2: {}", middle_score);
 }
