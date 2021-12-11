@@ -106,33 +106,55 @@ fn all_grid_positions(nrows: usize, ncols: usize) -> Vec<(usize, usize)> {
     result
 }
 
-fn iterate(grid: &mut Array2<u8>, iterations: usize) -> usize {
+fn iterate(
+    grid: &mut Array2<u8>,
+    iterations: usize,
+    stop_on_sync_flash: bool,
+) -> (usize, Option<usize>) {
     let nrows: usize = grid.nrows();
     let ncols: usize = grid.ncols();
+    let cells = nrows * ncols;
     let every_cell = all_grid_positions(nrows, ncols);
     let mut flashes: usize = 0;
+    let mut first_synchronized_flash: Option<usize> = None;
     println!("Before any steps:\n{}", &grid);
     for iteration in 1..=iterations {
         let flashes_this_cycle = cycle(grid, &every_cell);
+        flashes += flashes_this_cycle;
         println!(
             "After {} step(s):\n{}\n({} flashes)",
             iteration, &grid, flashes_this_cycle
         );
-        flashes += flashes_this_cycle;
+	if flashes_this_cycle == cells && first_synchronized_flash.is_none() {
+	    first_synchronized_flash = Some(iteration);
+	    if stop_on_sync_flash {
+		break;
+	    }
+	}
     }
-    flashes
+    (flashes, first_synchronized_flash)
 }
 
 fn part1(grid: &Array2<u8>) {
     const ITERATIONS: usize = 100;
-    let flashes = iterate(&mut grid.clone(), ITERATIONS);
+    let (flashes, _) = iterate(&mut grid.clone(), ITERATIONS, false);
     println!(
         "Day 11 part 1: after {} iterations there were {} flashes",
         ITERATIONS, flashes
     );
 }
 
-fn part2(_grid: &Array2<u8>) {}
+fn part2(grid: &Array2<u8>) {
+    let (_, first_sync) = iterate(&mut grid.clone(), usize::MAX, true);
+    if let Some(iter) = first_sync {
+	println!(
+            "Day 11 part 1: first synchronized flash at iteration {}",
+            iter
+	);
+    } else {
+	println!("Day 11 part 1: there was no synchronized flash.");
+    }
+}
 
 fn decode_cell(cell: char) -> u8 {
     let mut s: String = String::with_capacity(1);
