@@ -125,12 +125,12 @@ fn iterate(
             "After {} step(s):\n{}\n({} flashes)",
             iteration, &grid, flashes_this_cycle
         );
-	if flashes_this_cycle == cells && first_synchronized_flash.is_none() {
-	    first_synchronized_flash = Some(iteration);
-	    if stop_on_sync_flash {
-		break;
-	    }
-	}
+        if flashes_this_cycle == cells && first_synchronized_flash.is_none() {
+            first_synchronized_flash = Some(iteration);
+            if stop_on_sync_flash {
+                break;
+            }
+        }
     }
     (flashes, first_synchronized_flash)
 }
@@ -147,12 +147,12 @@ fn part1(grid: &Array2<u8>) {
 fn part2(grid: &Array2<u8>) {
     let (_, first_sync) = iterate(&mut grid.clone(), usize::MAX, true);
     if let Some(iter) = first_sync {
-	println!(
+        println!(
             "Day 11 part 1: first synchronized flash at iteration {}",
             iter
-	);
+        );
     } else {
-	println!("Day 11 part 1: there was no synchronized flash.");
+        println!("Day 11 part 1: there was no synchronized flash.");
     }
 }
 
