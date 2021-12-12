@@ -23,13 +23,11 @@ fn neighbours(r: usize, c: usize, rows: usize, cols: usize) -> Vec<(usize, usize
         if let Some(pc) = prev_col {
             result.push((pr, pc));
         }
-
         result.push((pr, c)); // North
         if let Some(nc) = next_col {
             result.push((pr, nc));
         }
     }
-
     if let Some(pc) = prev_col {
         result.push((r, pc)); // West
     }
@@ -37,7 +35,6 @@ fn neighbours(r: usize, c: usize, rows: usize, cols: usize) -> Vec<(usize, usize
     if let Some(nc) = next_col {
         result.push((r, nc)); // East
     }
-
     if let Some(next_row) = next_row {
         if let Some(pc) = prev_col {
             result.push((next_row, pc));
@@ -60,12 +57,9 @@ fn flash(
     flashed: &mut Array2<u8>,
 ) {
     assert_eq!(flashed[(r, c)], 0);
-    //println!("The octopus at ({},{}) flashes.", r, c);
     flashed[(r, c)] = 1;
     for n in neighbours(r, c, nrows, ncols) {
         if flashed[n] == 0 {
-            //println!("Bumping energy of the octopus at {:?} ({} to {}).",
-            //	     n, grid[n], grid[n]+1);
             grid[n] += 1;
             if grid[n] > 9 {
                 flash(grid, n.0, n.1, nrows, ncols, flashed);
@@ -116,7 +110,6 @@ fn iterate(
     let cells = nrows * ncols;
     let every_cell = all_grid_positions(nrows, ncols);
     let mut flashes: usize = 0;
-    let mut first_synchronized_flash: Option<usize> = None;
     println!("Before any steps:\n{}", &grid);
     for iteration in 1..=iterations {
         let flashes_this_cycle = cycle(grid, &every_cell);
@@ -125,19 +118,16 @@ fn iterate(
             "After {} step(s):\n{}\n({} flashes)",
             iteration, &grid, flashes_this_cycle
         );
-        if flashes_this_cycle == cells && first_synchronized_flash.is_none() {
-            first_synchronized_flash = Some(iteration);
-            if stop_on_sync_flash {
-                break;
-            }
+        if flashes_this_cycle == cells && stop_on_sync_flash {
+            return (flashes, Some(iteration));
         }
     }
-    (flashes, first_synchronized_flash)
+    (flashes, None)
 }
 
 fn part1(grid: &Array2<u8>) {
     const ITERATIONS: usize = 100;
-    let (flashes, _) = iterate(&mut grid.clone(), ITERATIONS, false);
+    let flashes = iterate(&mut grid.clone(), ITERATIONS, false).0;
     println!(
         "Day 11 part 1: after {} iterations there were {} flashes",
         ITERATIONS, flashes
@@ -145,14 +135,16 @@ fn part1(grid: &Array2<u8>) {
 }
 
 fn part2(grid: &Array2<u8>) {
-    let (_, first_sync) = iterate(&mut grid.clone(), usize::MAX, true);
-    if let Some(iter) = first_sync {
-        println!(
-            "Day 11 part 1: first synchronized flash at iteration {}",
-            iter
-        );
-    } else {
-        println!("Day 11 part 1: there was no synchronized flash.");
+    match iterate(&mut grid.clone(), usize::MAX, true) {
+        (_, Some(iter)) => {
+            println!(
+                "Day 11 part 2: first synchronized flash at iteration {}",
+                iter
+            );
+        }
+        (_, None) => {
+            println!("Day 11 part 2: there was no synchronized flash.");
+        }
     }
 }
 
