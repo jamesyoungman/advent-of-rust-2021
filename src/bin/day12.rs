@@ -4,14 +4,77 @@ use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::io::prelude::*;
 
-type Network = HashMap<String, HashSet<String>>;
+type Node = usize;
 
-fn part1(nodes: &Network) {
-    println!("Day 12 part 1: {}", count_paths(nodes, can_visit_part1));
+#[derive(Clone)]
+struct Network {
+    nodes: HashMap<Node, HashSet<Node>>,
+    name_to_node: HashMap<String, Node>,
+    node_to_name: HashMap<Node, String>,
 }
 
-fn part2(nodes: &Network) {
-    println!("Day 12 part 2: {}", count_paths(nodes, can_visit_part2));
+impl Network {
+    pub fn new() -> Network {
+	Network {
+	    nodes: HashMap::new(),
+	    name_to_node: HashMap::new(),
+	    node_to_name: HashMap::new(),
+	}
+    }
+
+    pub fn assign_node_id(&mut self, name: &str) -> Node {
+	match self.name_to_node.get(name) {
+	    Some(node) => *node,
+	    None => {
+		let next = self.name_to_node.len().into();
+		self.name_to_node.insert(name.to_string(), next);
+		self.node_to_name.insert(next, name.to_string());
+		next
+	    }
+	}
+    }
+
+    pub fn name_to_node(&self, name: &str) -> Option<Node> {
+	match self.name_to_node.get(name) {
+	    Some(node) => Some(*node),
+	    None => None,
+	}
+    }
+
+    pub fn node_to_name(&self, node: &Node) -> Option<String> {
+	self.node_to_name.get(node).map(String::from)
+    }
+
+    pub fn is_big_cave(&self, node: &Node) -> bool {
+	match self.node_to_name(node) {
+	    Some(name) => is_big_cave(&name),
+	    None => false,
+	}
+    }
+
+    pub fn add(&mut self, from: &str, to: &str) {
+	let f: Node = self.assign_node_id(from);
+	let t: Node = self.assign_node_id(to);
+        self.nodes
+            .entry(f)
+            .or_insert_with(HashSet::new)
+            .insert(t);
+    }
+
+    pub fn neighbours(&self, current: &Node) -> Option<&HashSet<Node>> {
+	self.nodes.get(current)
+    }
+
+}
+
+fn part1(nodes: &mut Network) {
+    println!("Day 12 part 1: {}",
+	     count_paths(nodes, can_visit_part1).unwrap());
+}
+
+fn part2(nodes: &mut Network) {
+    println!("Day 12 part 2: {}",
+	     count_paths(nodes, can_visit_part2).unwrap());
 }
 
 #[cfg(test)]
@@ -24,27 +87,17 @@ fn make_graph_from_strings(connections: &[&str]) -> Network {
 }
 
 fn make_graph(connections: &[(String, String)]) -> Network {
-    let mut result: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut result = Network::new();
     for (from, to) in connections {
-        result
-            .entry(from.to_string())
-            .or_insert_with(HashSet::new)
-            .insert(to.to_string());
-        result
-            .entry(to.to_string())
-            .or_insert_with(HashSet::new)
-            .insert(from.to_string());
+	result.add(from, to);
+	result.add(to, from);
     }
     result
 }
 
-fn neighbours<'a>(nodes: &'a Network, current: &str) -> Option<&'a HashSet<String>> {
-    nodes.get(current)
-}
-
 struct VisitTracker {
-    visit_count: HashMap<String, usize>,
-    visits: Vec<String>,
+    visit_count: HashMap<Node, usize>,
+    visits: Vec<Node>,
 }
 
 impl VisitTracker {
@@ -55,22 +108,22 @@ impl VisitTracker {
         }
     }
 
-    fn visit(&mut self, node: &str) {
-        *self.visit_count.entry(node.to_string()).or_insert(0) += 1;
-        self.visits.push(node.to_string());
+    fn visit(&mut self, node: &Node) {
+        *self.visit_count.entry(*node).or_insert(0) += 1;
+        self.visits.push(*node);
     }
 
-    fn unvisit(&mut self, node: &str) {
+    fn unvisit(&mut self, node: &Node) {
         match self.visit_count.get(node) {
             None | Some(0) => {
                 panic!("attempt to unvisit a node we never visited, {}", node);
             }
             Some(_) => (),
         }
-        *self.visit_count.entry(node.to_string()).or_insert(0) -= 1;
+        *self.visit_count.entry(*node).or_insert(0) -= 1;
         match self.visits.pop() {
             Some(last) => {
-                assert_eq!(last, node, "out-of-order call to unvisit");
+                assert_eq!(&last, node, "out-of-order call to unvisit");
             }
             None => {
                 panic!("attempt to unvisit a node {} while history is empty", node);
@@ -94,8 +147,12 @@ impl Display for VisitTracker {
     }
 }
 
-fn can_visit_part1(tracker: &VisitTracker, node: &str) -> bool {
-    if is_big_cave(node) {
+fn can_visit_part1(
+    network: &Network,
+    tracker: &VisitTracker,
+    node: &Node
+) -> bool {
+    if network.is_big_cave(node) {
         true
     } else {
         let count = *tracker.visit_count.get(node).unwrap_or(&0);
@@ -103,17 +160,26 @@ fn can_visit_part1(tracker: &VisitTracker, node: &str) -> bool {
     }
 }
 
-fn can_visit_part2(tracker: &VisitTracker, node: &str) -> bool {
-    let is_start_or_end = || -> bool { node == "start" || node == "end" };
+fn can_visit_part2(
+    network: &Network,
+    tracker: &VisitTracker,
+    node: &Node
+) -> bool {
+    let is_start_or_end = || -> bool {
+	match network.node_to_name(node) {
+	    Some(s) => s == "start" || s == "end",
+	    None => false,
+	}
+    };
 
     let too_many_visits = || -> bool {
         tracker
             .visit_count
             .iter()
-            .any(|(node, visits)| !is_big_cave(node) && *visits > 1)
+            .any(|(node, visits)| !network.is_big_cave(node) && *visits > 1)
     };
 
-    if is_big_cave(node) {
+    if network.is_big_cave(node) {
         true
     } else {
         match tracker.visit_count.get(node) {
@@ -128,11 +194,11 @@ fn can_visit_part2(tracker: &VisitTracker, node: &str) -> bool {
 }
 
 fn path_counter(
-    start: &str,
-    end: &str,
+    start: &Node,
+    end: &Node,
     nodes: &Network,
     visited: &mut VisitTracker,
-    can_visit: fn(tracker: &VisitTracker, node: &str) -> bool,
+    can_visit: fn(network: &Network, tracker: &VisitTracker, node: &Node) -> bool,
 ) -> usize {
     visited.visit(start);
     let count = if start == end {
@@ -140,9 +206,9 @@ fn path_counter(
         1
     } else {
         let mut n = 0;
-        if let Some(neighbours) = neighbours(nodes, start) {
+        if let Some(neighbours) = nodes.neighbours(start) {
             for neighbour in neighbours {
-                if can_visit(visited, neighbour) {
+                if can_visit(nodes, visited, neighbour) {
                     n += path_counter(neighbour, end, nodes, visited, can_visit);
                 }
             }
@@ -154,18 +220,25 @@ fn path_counter(
 }
 
 fn count_paths(
-    nodes: &Network,
-    can_visit: fn(tracker: &VisitTracker, node: &str) -> bool,
-) -> usize {
-    path_counter("start", "end", nodes, &mut VisitTracker::new(), can_visit)
+    nodes: &mut Network,
+    can_visit: fn(network: &Network, tracker: &VisitTracker, node: &Node) -> bool,
+) -> Result<usize, String> {
+    match nodes.name_to_node("start") {
+	Some(start) => match nodes.name_to_node("end") {
+	    Some(end) => Ok(path_counter(&start, &end, nodes, &mut VisitTracker::new(), can_visit)),
+	    None => Err("no end node".to_string()),
+	}
+	None => Err("no start node".to_string()),
+    }
 }
 
 #[cfg(test)]
 fn count_paths_in_connections(
     connections: &[&str],
-    can_visit: fn(tracker: &VisitTracker, node: &str) -> bool,
-) -> usize {
-    count_paths(&make_graph_from_strings(connections), can_visit)
+    can_visit: fn(network: &Network, tracker: &VisitTracker, node: &Node) -> bool,
+) -> Result<usize, String> {
+    let mut graph = make_graph_from_strings(connections);
+    count_paths(&mut graph, can_visit)
 }
 
 #[test]
@@ -175,7 +248,7 @@ fn test_count_paths_part1() {
             &["start-A", "start-b", "A-c", "A-b", "b-d", "A-end", "b-end"],
             can_visit_part1,
         ),
-        10
+        Ok(10)
     );
     assert_eq!(
         count_paths_in_connections(
@@ -185,7 +258,7 @@ fn test_count_paths_part1() {
             ],
             can_visit_part1,
         ),
-        19
+        Ok(19)
     );
     assert_eq!(
         count_paths_in_connections(
@@ -196,7 +269,7 @@ fn test_count_paths_part1() {
             ],
             can_visit_part1,
         ),
-        226
+        Ok(226)
     );
 }
 
@@ -207,7 +280,7 @@ fn test_count_paths_part2() {
             &["start-A", "start-b", "A-c", "A-b", "b-d", "A-end", "b-end"],
             can_visit_part2,
         ),
-        36
+        Ok(36)
     );
     assert_eq!(
         count_paths_in_connections(
@@ -217,7 +290,7 @@ fn test_count_paths_part2() {
             ],
             can_visit_part2,
         ),
-        103
+        Ok(103)
     );
     assert_eq!(
         count_paths_in_connections(
@@ -228,12 +301,12 @@ fn test_count_paths_part2() {
             ],
             can_visit_part2,
         ),
-        3509
+        Ok(3509)
     );
 }
 
-fn is_big_cave(node: &str) -> bool {
-    node.chars().all(|ch| ch.is_ascii_uppercase())
+fn is_big_cave(node_name: &str) -> bool {
+    node_name.chars().all(|ch| ch.is_ascii_uppercase())
 }
 
 #[test]
@@ -270,8 +343,8 @@ fn main() {
         .map(|thing| thing.unwrap())
         .map(|line| string_to_connection(line.as_str()))
         .collect();
-    let graph = make_graph(&connections);
+    let mut graph = make_graph(&connections);
 
-    part1(&graph);
-    part2(&graph);
+    part1(&mut graph.clone());
+    part2(&mut graph);
 }
