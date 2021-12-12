@@ -157,34 +157,22 @@ impl Display for Part2Tracker {
 
 impl Visited for Part2Tracker {
     fn can_visit(&self, node: &str) -> bool {
+        let is_start_or_end = || -> bool { node == "start" || node == "end" };
+
+        let too_many_visits = |inner: &BaseTracker| -> bool {
+            inner
+                .visit_count
+                .iter()
+                .any(|(node, visits)| !is_big_cave(node) && *visits > 1)
+        };
+
         if is_big_cave(node) {
             true
         } else {
             match self.inner.visit_count.get(node) {
                 Some(0) | None => true,
-                Some(1) => {
-                    if node == "start" || node == "end" {
-                        //eprintln!("p2: denying double visit to start or end node {}: {}",
-                        //	  node, self.inner);
-                        false
-                    } else if self
-                        .inner
-                        .visit_count
-                        .iter()
-                        .find(|(node, visits)| !is_big_cave(node) && **visits > 1)
-                        .is_some()
-                    {
-                        // Already visited some other small cave twice.
-                        //eprintln!("p2: denying {}, already have a double visit: {}", node, self.inner);
-                        false
-                    } else {
-                        true
-                    }
-                }
-                Some(2) => {
-                    // eprintln!("p2: denying triple visit to {}: {}", node, self.inner);
-                    false
-                }
+                Some(1) => !(is_start_or_end() || too_many_visits(&self.inner)),
+                Some(2) => false,
                 Some(n) => {
                     panic!("Part2Tracker: visited node {} {} times, max 2", node, n);
                 }
