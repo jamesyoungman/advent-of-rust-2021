@@ -15,66 +15,63 @@ struct Network {
 
 impl Network {
     pub fn new() -> Network {
-	Network {
-	    nodes: HashMap::new(),
-	    name_to_node: HashMap::new(),
-	    node_to_name: HashMap::new(),
-	}
+        Network {
+            nodes: HashMap::new(),
+            name_to_node: HashMap::new(),
+            node_to_name: HashMap::new(),
+        }
     }
 
     pub fn assign_node_id(&mut self, name: &str) -> Node {
-	match self.name_to_node.get(name) {
-	    Some(node) => *node,
-	    None => {
-		let next = self.name_to_node.len().into();
-		self.name_to_node.insert(name.to_string(), next);
-		self.node_to_name.insert(next, name.to_string());
-		next
-	    }
-	}
+        match self.name_to_node.get(name) {
+            Some(node) => *node,
+            None => {
+                let next = self.name_to_node.len();
+                self.name_to_node.insert(name.to_string(), next);
+                self.node_to_name.insert(next, name.to_string());
+                next
+            }
+        }
     }
 
     pub fn name_to_node(&self, name: &str) -> Option<Node> {
-	match self.name_to_node.get(name) {
-	    Some(node) => Some(*node),
-	    None => None,
-	}
+	self.name_to_node.get(name).copied()
     }
 
     pub fn node_to_name(&self, node: &Node) -> Option<String> {
-	self.node_to_name.get(node).map(String::from)
+        self.node_to_name.get(node).map(String::from)
     }
 
     pub fn is_big_cave(&self, node: &Node) -> bool {
-	match self.node_to_name(node) {
-	    Some(name) => is_big_cave(&name),
-	    None => false,
-	}
+        match self.node_to_name(node) {
+            Some(name) => is_big_cave(&name),
+            None => false,
+        }
     }
 
     pub fn add(&mut self, from: &str, to: &str) {
-	let f: Node = self.assign_node_id(from);
-	let t: Node = self.assign_node_id(to);
-        self.nodes
-            .entry(f)
-            .or_insert_with(HashSet::new)
-            .insert(t);
+        let f: Node = self.assign_node_id(from);
+        let t: Node = self.assign_node_id(to);
+        self.nodes.entry(f).or_insert_with(HashSet::new).insert(t);
     }
 
     pub fn neighbours(&self, current: &Node) -> Option<&HashSet<Node>> {
-	self.nodes.get(current)
+        self.nodes.get(current)
     }
-
 }
 
 fn part1(nodes: &mut Network) {
-    println!("Day 12 part 1: {}",
-	     count_paths(nodes, can_visit_part1).unwrap());
+    println!(
+        "Day 12 part 1: {}",
+        count_paths(nodes, can_visit_part1).unwrap()
+    );
 }
 
 fn part2(nodes: &mut Network) {
-    println!("Day 12 part 2: {}",
-	     count_paths(nodes, can_visit_part2).unwrap());
+    println!(
+        "Day 12 part 2: {}",
+        count_paths(nodes, can_visit_part2).unwrap()
+    );
 }
 
 #[cfg(test)]
@@ -89,8 +86,8 @@ fn make_graph_from_strings(connections: &[&str]) -> Network {
 fn make_graph(connections: &[(String, String)]) -> Network {
     let mut result = Network::new();
     for (from, to) in connections {
-	result.add(from, to);
-	result.add(to, from);
+        result.add(from, to);
+        result.add(to, from);
     }
     result
 }
@@ -147,11 +144,7 @@ impl Display for VisitTracker {
     }
 }
 
-fn can_visit_part1(
-    network: &Network,
-    tracker: &VisitTracker,
-    node: &Node
-) -> bool {
+fn can_visit_part1(network: &Network, tracker: &VisitTracker, node: &Node) -> bool {
     if network.is_big_cave(node) {
         true
     } else {
@@ -160,16 +153,12 @@ fn can_visit_part1(
     }
 }
 
-fn can_visit_part2(
-    network: &Network,
-    tracker: &VisitTracker,
-    node: &Node
-) -> bool {
+fn can_visit_part2(network: &Network, tracker: &VisitTracker, node: &Node) -> bool {
     let is_start_or_end = || -> bool {
-	match network.node_to_name(node) {
-	    Some(s) => s == "start" || s == "end",
-	    None => false,
-	}
+        match network.node_to_name(node) {
+            Some(s) => s == "start" || s == "end",
+            None => false,
+        }
     };
 
     let too_many_visits = || -> bool {
@@ -224,11 +213,17 @@ fn count_paths(
     can_visit: fn(network: &Network, tracker: &VisitTracker, node: &Node) -> bool,
 ) -> Result<usize, String> {
     match nodes.name_to_node("start") {
-	Some(start) => match nodes.name_to_node("end") {
-	    Some(end) => Ok(path_counter(&start, &end, nodes, &mut VisitTracker::new(), can_visit)),
-	    None => Err("no end node".to_string()),
-	}
-	None => Err("no start node".to_string()),
+        Some(start) => match nodes.name_to_node("end") {
+            Some(end) => Ok(path_counter(
+                &start,
+                &end,
+                nodes,
+                &mut VisitTracker::new(),
+                can_visit,
+            )),
+            None => Err("no end node".to_string()),
+        },
+        None => Err("no start node".to_string()),
     }
 }
 
