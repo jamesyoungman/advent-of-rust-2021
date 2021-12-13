@@ -55,12 +55,28 @@ impl Display for Point {
     }
 }
 
-fn show_points<'a, I>(points: I)
-where
-    I: Iterator<Item = &'a Point>,
-{
-    for point in points {
-        println!("{}", point);
+fn show_points<'a>(points: &HashSet<Point>) {
+    let (xmax, ymax) = match points.iter().map(|p| p.x).max() {
+	Some(xmax) => match points.iter().map(|p| p.y).max() {
+	    Some(ymax) => (xmax, ymax),
+	    None => {
+		panic!("no y values");
+	    }
+	}
+	None => {
+	    panic!("no x values");
+	}
+    };
+    for y in 0..=ymax {
+	for x in 0..=xmax {
+	    let here = Point {x, y};
+	    if points.contains(&here) {
+		print!("#");
+	    } else {
+		print!(".");
+	    }
+	}
+	println!("");
     }
 }
 
@@ -136,7 +152,7 @@ fn part1(dots: &HashSet<Point>, folds: &[Fold]) {
             println!("before fold there are {} dots", dots.len());
             let folded = single_fold(dots, first_fold);
             println!("after fold there are {} dots", folded.len());
-            show_points(folded.iter());
+            show_points(&folded);
             println!("Day 13 part 1: number of dots: {}", folded.len());
         }
         None => {
@@ -145,7 +161,14 @@ fn part1(dots: &HashSet<Point>, folds: &[Fold]) {
     }
 }
 
-fn part2(_dots: &HashSet<Point>, _folds: &[Fold]) {}
+fn part2(orig_dots: &HashSet<Point>, folds: &[Fold]) {
+    let mut dots = orig_dots.clone();
+    for fold in folds {
+	dots = single_fold(&dots, fold);
+    }
+    println!("Day 13 part 2:");
+    show_points(&dots);
+}
 
 fn parse_dots(input: &str) -> HashSet<Point> {
     input
