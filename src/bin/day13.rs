@@ -4,92 +4,6 @@ use std::io;
 use std::io::prelude::*;
 use std::num::ParseIntError;
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Hash, Clone)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-impl Point {
-    fn transform(&self, fold: &Fold) -> Point {
-        match fold {
-            Fold::X(x) => {
-                if self.x < *x {
-                    self.clone()
-                } else {
-                    Point {
-                        x: 2 * x - self.x,
-                        y: self.y,
-                    }
-                }
-            }
-            Fold::Y(y) => {
-                if self.y < *y {
-                    self.clone()
-                } else {
-                    Point {
-                        x: self.x,
-                        y: 2 * y - self.y,
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[test]
-fn test_transform() {
-    assert_eq!(
-        Point { x: 10, y: 6 }.transform(&Fold::Y(5)),
-        Point { x: 10, y: 4 }
-    );
-    assert_eq!(
-        Point { x: 6, y: 10 }.transform(&Fold::X(5)),
-        Point { x: 4, y: 10 }
-    );
-}
-
-impl Display for Point {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "({},{})", self.x, self.y)
-    }
-}
-
-fn show_points(points: &HashSet<Point>) {
-    let (xmax, ymax) = match points.iter().map(|p| p.x).max() {
-	Some(xmax) => match points.iter().map(|p| p.y).max() {
-	    Some(ymax) => (xmax, ymax),
-	    None => {
-		panic!("no y values");
-	    }
-	}
-	None => {
-	    panic!("no x values");
-	}
-    };
-    for y in 0..=ymax {
-	for x in 0..=xmax {
-	    let here = Point {x, y};
-	    if points.contains(&here) {
-		print!("#");
-	    } else {
-		print!(".");
-	    }
-	}
-	println!();
-    }
-}
-
-impl TryFrom<(&str, &str)> for Point {
-    type Error = ParseIntError;
-    fn try_from(xy: (&str, &str)) -> Result<Point, ParseIntError> {
-        match (xy.0.parse(), xy.1.parse()) {
-            (Err(e), _) | (_, Err(e)) => Err(e),
-            (Ok(x), Ok(y)) => Ok(Point { x, y }),
-        }
-    }
-}
-
 enum Fold {
     X(i32),
     Y(i32),
@@ -142,32 +56,125 @@ impl TryFrom<&str> for Fold {
     }
 }
 
-fn single_fold(dots: &HashSet<Point>, fold: &Fold) -> HashSet<Point> {
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Hash, Clone)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn transform_ordinate(val: i32, reflect_about: Option<i32>) -> i32 {
+    match reflect_about {
+        None => val,
+        Some(r) => {
+            if val < r {
+                val
+            } else {
+                2 * r - val
+            }
+        }
+    }
+}
+
+impl Point {
+    fn transform(&self, fold: &Fold) -> Point {
+        Point {
+            x: transform_ordinate(
+                self.x,
+                if let Fold::X(r) = fold {
+                    Some(*r)
+                } else {
+                    None
+                },
+            ),
+            y: transform_ordinate(
+                self.y,
+                if let Fold::Y(r) = fold {
+                    Some(*r)
+                } else {
+                    None
+                },
+            ),
+        }
+    }
+}
+
+#[test]
+fn test_transform() {
+    assert_eq!(
+        Point { x: 10, y: 6 }.transform(&Fold::Y(5)),
+        Point { x: 10, y: 4 }
+    );
+    assert_eq!(
+        Point { x: 6, y: 10 }.transform(&Fold::X(5)),
+        Point { x: 4, y: 10 }
+    );
+}
+
+impl Display for Point {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "({},{})", self.x, self.y)
+    }
+}
+
+fn show_points(points: &HashSet<Point>) {
+    let xmax = points
+        .iter()
+        .map(|p| p.x)
+        .max()
+        .expect("should not be empty");
+    let ymax = points
+        .iter()
+        .map(|p| p.y)
+        .max()
+        .expect("should not be empty");
+
+    if xmax > 100 || ymax > 100 {
+        println!("grid is too large to show");
+    } else {
+        for y in 0..=ymax {
+            for x in 0..=xmax {
+                let mark = if points.contains(&Point { x, y }) {
+                    "#"
+                } else {
+                    "."
+                };
+                print!("{}", mark);
+            }
+            println!();
+        }
+    }
+    println!("{} dots", points.len());
+}
+
+impl TryFrom<(&str, &str)> for Point {
+    type Error = ParseIntError;
+    fn try_from(xy: (&str, &str)) -> Result<Point, ParseIntError> {
+        match (xy.0.parse(), xy.1.parse()) {
+            (Err(e), _) | (_, Err(e)) => Err(e),
+            (Ok(x), Ok(y)) => Ok(Point { x, y }),
+        }
+    }
+}
+
+fn single_fold(dots: HashSet<Point>, fold: &Fold) -> HashSet<Point> {
     HashSet::from_iter(dots.iter().map(|dot| dot.transform(fold)))
 }
 
+fn multiple_fold<'a, I>(dots: HashSet<Point>, folds: I) -> HashSet<Point>
+where
+    I: Iterator<Item = &'a Fold>,
+{
+    folds.fold(dots, single_fold)
+}
+
 fn part1(dots: &HashSet<Point>, folds: &[Fold]) {
-    match folds.first() {
-        Some(first_fold) => {
-            println!("before fold there are {} dots", dots.len());
-            let folded = single_fold(dots, first_fold);
-            println!("after fold there are {} dots", folded.len());
-            show_points(&folded);
-            println!("Day 13 part 1: number of dots: {}", folded.len());
-        }
-        None => {
-            panic!("no fold instructions!");
-        }
-    }
+    println!("Day 13 part 1:");
+    show_points(&multiple_fold(dots.clone(), folds.iter().take(1)));
 }
 
 fn part2(orig_dots: &HashSet<Point>, folds: &[Fold]) {
-    let mut dots = orig_dots.clone();
-    for fold in folds {
-	dots = single_fold(&dots, fold);
-    }
     println!("Day 13 part 2:");
-    show_points(&dots);
+    show_points(&multiple_fold(orig_dots.clone(), folds.iter()));
 }
 
 fn parse_dots(input: &str) -> HashSet<Point> {
@@ -220,13 +227,6 @@ fn main() {
         }
     }
     let (dots, folds) = parse_input(input.as_str());
-    for dot in dots.iter() {
-        println!("{}", dot);
-    }
-    for fold in &folds {
-        println!("{}", fold);
-    }
-
     part1(&dots, &folds);
     part2(&dots, &folds);
 }
