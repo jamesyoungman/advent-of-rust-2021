@@ -55,7 +55,7 @@ impl Display for Point {
     }
 }
 
-fn show_points<'a>(points: &HashSet<Point>) {
+fn show_points(points: &HashSet<Point>) {
     let (xmax, ymax) = match points.iter().map(|p| p.x).max() {
 	Some(xmax) => match points.iter().map(|p| p.y).max() {
 	    Some(ymax) => (xmax, ymax),
@@ -76,7 +76,7 @@ fn show_points<'a>(points: &HashSet<Point>) {
 		print!(".");
 	    }
 	}
-	println!("");
+	println!();
     }
 }
 
