@@ -138,12 +138,16 @@ fn test_parse_rule() {
     assert_eq!(parse_rule("AB -> C"), Ok((('A', 'B'), 'C')));
     assert!(parse_rule("AB ->C").is_err());
     assert!(parse_rule("A B -> C").is_err());
+    assert!(parse_rule("AB C").is_err());
+    assert!(parse_rule("AB - C").is_err());
     assert!(parse_rule("AB-> C").is_err());
     assert!(parse_rule("AB->C").is_err());
     assert!(parse_rule("AB C").is_err());
     assert!(parse_rule("A->C").is_err());
     assert!(parse_rule("AB -> ").is_err());
     assert!(parse_rule("-> C").is_err());
+    assert!(parse_rule("AB -> C shouldnotbehere").is_err());
+    assert!(parse_rule("AB -> CC").is_err());
 }
 
 fn parse_rules(input: &str) -> Result<Rules, String> {
