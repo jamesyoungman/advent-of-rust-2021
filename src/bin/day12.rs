@@ -35,7 +35,7 @@ impl Network {
     }
 
     pub fn name_to_node(&self, name: &str) -> Option<Node> {
-	self.name_to_node.get(name).copied()
+        self.name_to_node.get(name).copied()
     }
 
     pub fn node_to_name(&self, node: &Node) -> Option<String> {
