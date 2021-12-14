@@ -169,25 +169,34 @@ fn parse_input(input: &str) -> Result<(String, Rules), String> {
     }
 }
 
-fn count_if_right_is_b(item: (&(char, char), &usize)) -> Option<usize> {
+fn count_if_right_is(item: (&(char, char), &usize), wanted: char) -> Option<usize> {
     match item {
-        ((_, 'B'), count) => Some(*count),
+        ((_, ch), count) if *ch == wanted => Some(*count),
         _ => None,
     }
 }
 
-fn count_frequencies(input: &HashMap<Pair, usize>) -> HashMap<char, usize> {
+fn count_frequencies(input: &HashMap<Pair, usize>, final_char: char) -> HashMap<char, usize> {
     let mut frequency_counts = HashMap::new();
     for ((left, _), count) in input.iter() {
         *frequency_counts.entry(*left).or_insert(0) += count;
     }
-    frequency_counts.insert('B', input.iter().filter_map(count_if_right_is_b).sum());
+    frequency_counts.insert(
+        final_char,
+        input
+            .iter()
+            .filter_map(|item| count_if_right_is(item, final_char))
+            .sum(),
+    );
     frequency_counts
 }
 
-fn chars_by_frequency(input: &HashMap<Pair, usize>) -> BTreeMap<usize, Vec<char>> {
+fn chars_by_frequency(
+    input: &HashMap<Pair, usize>,
+    final_char: char,
+) -> BTreeMap<usize, Vec<char>> {
     let mut result: BTreeMap<usize, Vec<char>> = BTreeMap::new();
-    let histogram: HashMap<char, usize> = count_frequencies(input);
+    let histogram: HashMap<char, usize> = count_frequencies(input, final_char);
     for (ch, freq) in histogram {
         result.entry(freq).or_insert_with(Vec::new).push(ch);
     }
@@ -198,9 +207,10 @@ fn highest_and_lowest_freq_after_n_iterations(
     template: &str,
     iterations: usize,
     rules: &Rules,
+    final_char: char,
 ) -> (usize, usize) {
     let result: HashMap<Pair, usize> = apply_rules(template, iterations, rules);
-    let chars_by_frequency: BTreeMap<usize, Vec<char>> = chars_by_frequency(&result);
+    let chars_by_frequency: BTreeMap<usize, Vec<char>> = chars_by_frequency(&result, final_char);
     match (
         chars_by_frequency.iter().next(),
         chars_by_frequency.iter().rev().next(),
@@ -217,17 +227,24 @@ fn highest_and_lowest_freq_after_n_iterations(
 #[test]
 fn test_highest_and_lowest_freq_after_n_iterations() {
     fn hl(input: &str, count: usize) -> (usize, usize) {
+        let last_char_in_input: char = input.chars().rev().next().unwrap();
         let rules: Rules = parse_rules(SAMPLE_RULES).expect("example should be valid");
-        highest_and_lowest_freq_after_n_iterations(input, count, &rules)
+        highest_and_lowest_freq_after_n_iterations(input, count, &rules, last_char_in_input)
     }
 
-    assert_eq!(hl("NNCB", 1), (1, 2));
-    assert_eq!(hl("NNCB", 10), (161, 1749));
+    const TEMPLATE: &str = "NNCB";
+    assert_eq!(hl(TEMPLATE, 1), (1, 2));
+    assert_eq!(hl(TEMPLATE, 10), (161, 1749));
 }
 
 fn solve(template: &str, rules: &Rules, iterations: usize) -> usize {
-    let (lowest_freq, highest_freq) =
-        highest_and_lowest_freq_after_n_iterations(template, iterations, rules);
+    let last_char_in_template: char = template.chars().rev().next().unwrap();
+    let (lowest_freq, highest_freq) = highest_and_lowest_freq_after_n_iterations(
+        template,
+        iterations,
+        rules,
+        last_char_in_template,
+    );
     highest_freq - lowest_freq
 }
 
