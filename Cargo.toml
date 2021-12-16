@@ -8,6 +8,7 @@ authors = ["James Youngman <james@youngman.org>"]
 
 [dependencies]
 ndarray = "0.15"		# day 09
+pathfinding = "3.0.5"           # day 15
 
 [[bin]]
 name = "day01"

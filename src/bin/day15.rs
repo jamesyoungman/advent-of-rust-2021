@@ -1,9 +1,10 @@
-use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::io::prelude::*;
 
 use ndarray::prelude::*;
+
+use pathfinding::directed::astar::astar;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 struct Point {
@@ -14,6 +15,12 @@ struct Point {
 impl Point {
     pub fn new(x: usize, y: usize) -> Point {
         Point { x, y }
+    }
+}
+
+impl Display for Point {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	write!(f, "({},{})", self.x, self.y)
     }
 }
 
@@ -28,11 +35,11 @@ impl Grid {
     }
 
     pub fn height(&self) -> usize {
-        self.risk.ncols()
+        self.risk.nrows()
     }
 
     pub fn width(&self) -> usize {
-        self.risk.nrows()
+        self.risk.ncols()
     }
 
     pub fn neighbours(&self, p: &Point) -> Vec<Point> {
@@ -48,12 +55,25 @@ impl Grid {
     }
 }
 
+impl Display for Grid {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	writeln!(f, "Grid; {}x{}", self.height(), self.width())?;
+	for row in 0..self.height() {
+	    for col in 0..self.width() {
+		let p = Point { x: col, y: row };
+		write!(f, "{}", self.get(&p))?;
+	    }
+	    f.write_str("\n")?;
+	}
+	Ok(())
+    }
+}
+
 fn decode_cell(cell: char) -> usize {
     let mut s: String = String::with_capacity(1);
     s.push(cell);
     match s.parse() {
         Ok(n) => {
-            assert!(n >= 0);
             assert!(n <= 9);
             n
         }
@@ -78,8 +98,13 @@ impl TryFrom<&[String]> for Grid {
             for line in lines {
                 assert_eq!(line.len(), width);
             }
-            let risk = Array::from_shape_fn((height, width), |(r, c)| decode_cell(cells[r][c]));
-            Ok(Grid { risk })
+            let risk = Array::from_shape_fn(
+		(height, width),
+		|(c, r)| decode_cell(cells[r][c]));
+	    println!("risk:\n{:?}", &risk);
+	    let result = Grid { risk };
+	    println!("grid:\n{}", &result);
+            Ok(result)
         }
     }
 }
@@ -103,166 +128,76 @@ fn neighbours(p: &Point, rows: usize, cols: usize) -> Vec<Point> {
     // Neighbours are N, E, S, W.
     // We do not include NE, SE, SW, NW.
     if let Some(pr) = prev_row {
-        result.push(Point::new(pr, c));
+        result.push(Point::new(c, pr)); // N
     }
     if let Some(pc) = prev_col {
-        result.push(Point::new(r, pc)); // West
+        result.push(Point::new(pc, r)); // West
     }
     // miss out myself
     if let Some(nc) = next_col {
-        result.push(Point::new(r, nc)); // East
+        result.push(Point::new(nc, r)); // East
     }
     if let Some(next_row) = next_row {
-        result.push(Point::new(next_row, c)); // South
+        result.push(Point::new(c, next_row)); // South
     }
     assert!(result.len() == 4 || result.len() == 3 || result.len() == 2);
     result
 }
 
-#[derive(Debug, Clone, Eq)]
-struct Path {
-    inorder: Vec<Point>,
-    visited: HashSet<Point>,
-}
-
-impl Path {
-    pub fn new() -> Path {
-	Path {
-	    inorder: Vec::new(),
-	    visited: HashSet::new(),
-	}
-    }
-
-    pub fn contains(&self, p: &Point) -> bool {
-	self.visited.contains(p)
-    }
-
-    pub fn push(&mut self, p: Point) {
-	self.visited.insert(p.clone());
-	self.inorder.push(p);
-    }
-
-    pub fn visiting(&self, p: Point) -> Path {
-	let mut result = self.clone();
-	result.push(p);
-	result
-
-    }
-
-    pub fn pop(&mut self) -> Option<Point> {
-	if let Some(p) = self.inorder.pop() {
-	    self.visited.remove(&p);
-	    Some(p)
-	} else {
-	    None
-	}
-    }
-}
-
-impl Ord for Path {
-    fn cmp(&self, other: &Path) -> Ordering {
-	for (mine, theirs) in self.inorder.iter().zip(other.inorder.iter()) {
-	    let comparison = mine.cmp(theirs);
-	    if comparison != Ordering::Equal {
-		return comparison;
-	    }
-	}
-	// All elements in the common prefix match.  Hence the longer
-	// sequence is the greater.
-	self.inorder.len().cmp(&other.inorder.len())
-    }
-}
-
-impl PartialOrd for Path {
-    fn partial_cmp(&self, other: &Path) -> Option<Ordering> {
-	Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Path {
-    fn eq(&self, other: &Path) -> bool {
-	self.cmp(other) == Ordering::Equal
-    }
-}
-
-
-impl From<Vec<Point>> for Path {
-    fn from(points: Vec<Point>) -> Path {
-	let mut result = Path::new();
-	for p in points {
-	    result.push(p);
-	}
-	result
-    }
-}
-
-fn risk_search(
-    start: &Point,
-    end: &Point,
-    grid: &Grid,
-    current: usize,
-    best: &mut usize,
-    path: Path,
-) -> Option<(usize, Path)> {
-    if start == end {
-	if current < *best {
-	    *best = current;
-	}
-	Some((current, path))
+fn abs_diff(a: usize, b: usize) -> usize {
+    if a > b {
+	a - b
     } else {
-	let best_neighbour: Option<(usize, Path)> = grid.neighbours(&start).iter()
-	    .filter(|n| !path.contains(n))
-	    .filter_map(|n| -> Option<(usize, Path)> {
-		let next_path: Path = path.visiting(*n);
-		let next_risk: usize = current + grid.get(n);
-		if next_risk < *best {
-		    assert_eq!(next_risk,
-			       next_path.inorder.iter().map(|pos| grid.get(pos)).sum());
-		    risk_search(n, end, grid, next_risk, best, next_path)
-		} else {
-		    // Bound the search here, we cannot beat `best`.
-		    None
-		}
-	    })
-	    .min();
-	best_neighbour
+	b - a
     }
 }
 
-fn lowest_risk_path(start: &Point, end: &Point, grid: &Grid) -> Option<(usize, Path)> {
-    let mut path = Path::new();
-    let mut best = usize::MAX;
-    let mut visited: HashSet<Point> = HashSet::new();
-    visited.insert(*start);
-    risk_search(start, end, grid, 0, &mut best, path)
+/// Manhattan distance between two points
+fn manhattan(a: &Point, b: &Point) -> usize {
+    abs_diff(a.x, b.x) + abs_diff(a.y, b.y)
+}
+
+fn lowest_risk_path(start: &Point, end: &Point, costs: &Grid) -> usize {
+    let successors = |pos: &Point| -> Vec<(Point, usize)> {
+	costs.neighbours(pos).iter()
+	    .map(|pos| (*pos, costs.get(pos)))
+	    .collect()
+    };
+    let heuristic = |pos: &Point| -> usize {
+	manhattan(pos, end)
+    };
+    let success = |pos: &Point| -> bool {
+	pos == end
+    };
+    match astar(start, successors, heuristic, success) {
+	Some((path, cost)) => {
+	    println!("astar solution: path is {:#?}", path);
+	    cost
+	}
+	None => {
+	    panic!("no solution found");
+	}
+    }
 }
 
 #[test]
 fn test_lowest_risk_path() {
 
-    fn runtest(numbers: &[&str]) -> (usize, Path) {
+    fn runtest(numbers: &[&str]) -> usize {
 	let ns: Vec<String> = numbers.iter().map(|line| line.to_string()).collect();
 	let grid = Grid::try_from(ns.as_slice()).expect("valid test data");
-	match lowest_risk_path(&grid.top_left(), &grid.bottom_right(), &grid) {
-	    Some((lowest, path)) => {
-		println!("tuntest: lowest={}", lowest);
-		println!("runtest: path={:?}", path);
-		(lowest, path)
-	    }
-	    None => {
-		panic!("runtest: no path found");
-	    }
-	}
+	println!("{}", &grid);
+	lowest_risk_path(&grid.top_left(), &grid.bottom_right(), &grid)
     }
 
-    let (lowest, _path) = runtest(&[
+    let lowest = runtest(&[
         "116",
         "138",
         "213",
     ]);
     assert_eq!(lowest, 7);
 
-    let (lowest, path) = runtest(&[
+    let lowest = runtest(&[
         "1163751742",
         "1381373672",
         "2136511328",
@@ -275,36 +210,17 @@ fn test_lowest_risk_path() {
         "2311944581",
     ]);
     assert_eq!(lowest, 40);
-    assert_eq!(
-        path,
-	Path::from(vec![
-            Point::new(0, 1),
-            Point::new(0, 2),
-            Point::new(1, 2),
-            Point::new(2, 2),
-            Point::new(3, 2),
-            Point::new(4, 2),
-            Point::new(5, 2),
-            Point::new(6, 2),
-            Point::new(6, 3),
-            Point::new(7, 3),
-            Point::new(7, 4),
-            Point::new(7, 5),
-            Point::new(8, 5),
-            Point::new(8, 6),
-            Point::new(8, 7),
-            Point::new(8, 8),
-            Point::new(9, 8),
-            Point::new(9, 9)
-        ]),
-    );
+    // There are multiple paths of cost 40 (e.g. pass through
+    // (7,5) or (8,4) so we don't check that the chosen path
+    // is identical.
 }
 
-fn part1() {
-    println!("Day 15 part 1: ");
+fn part1(grid: &Grid) {
+    let cost = lowest_risk_path(&grid.top_left(), &grid.bottom_right(), grid);
+    println!("Day 15 part 1: {}", cost);
 }
 
-fn part2() {
+fn part2(_grid: &Grid) {
     println!("Day 15 part 2: ");
 }
 
@@ -314,4 +230,6 @@ fn main() {
         .map(|thing| thing.unwrap())
         .collect();
     let grid = Grid::try_from(lines.as_slice()).expect("valid input");
+    part1(&grid);
+    part2(&grid);
 }
