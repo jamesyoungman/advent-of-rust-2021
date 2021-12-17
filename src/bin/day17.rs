@@ -86,8 +86,6 @@ fn test_parse_target() {
 }
 
 fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<(i32, i32)> {
-    let highpoint = (yv * yv + yv) / 2;
-    //dbg!(&highpoint);
     let mut result = Vec::new();
     let mut x = 0;
     let mut y = 0;
@@ -105,8 +103,6 @@ fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<(i32,
 	    break;
 	}
     }
-    //dbg!(&result);
-    assert_eq!(*result.iter().map(|(_x, y)| y).max().unwrap(), highpoint);
     result
 }
 
@@ -134,17 +130,33 @@ fn test_sim() {
     assert_eq!(sim("overshoot-x", 1000, 2, &target), (false, tri(2)));
 }
 
-fn solve(target: &Target) -> Option<i32> {
+fn on_target_velocities(target: &Target) -> Vec<(i32, i32, i32)> {
+    let d = -(target.y.start - 1);
     (1..target.x.end)
-	.flat_map(|xv: i32| (1..500).map(move |yv: i32| (xv, yv)))
+	.flat_map(|xv: i32| ((-d)..d).map(move |yv: i32| (xv, yv)))
 	.filter_map(|(xv, yv)| {
 	    let (hit, high) = sim("solve", xv, yv, target);
 	    if hit {
-		Some(high)
+		Some((xv, yv, high))
 	    } else {
 		None
 	    }
 	})
+	.collect()
+}
+
+#[test]
+fn test_on_target_velocities() {
+    let target = Target {
+	x: 20..31,
+	y: -10..-4
+    };
+    assert_eq!(on_target_velocities(&target).len(), 112);
+}
+
+fn solve(target: &Target) -> Option<i32> {
+    on_target_velocities(target).iter()
+	.map(|(_xv, _yv, high)| *high)
 	.max()
 }
 
@@ -161,8 +173,9 @@ fn part1(target: &Target) {
     println!("Day 17 part 1: {}", solve(target).unwrap());
 }
 
-fn part2(_t: &Target) {
-    println!("Day 17 part 2: ");
+fn part2(target: &Target) {
+    let n = on_target_velocities(target).len();
+    println!("Day 17 part 2: {}", n);
 }
 
 fn main() {
