@@ -24,14 +24,14 @@ impl Operation {
         }
     }
 
-    fn evaluate_over(&self, recursion_level: u32, subpackets: &[Box<Packet>]) -> u64 {
+    fn evaluate_over(&self, recursion_level: u32, subpackets: &[Packet]) -> u64 {
         let values: Vec<u64> = subpackets
             .iter()
             .map(|x| x.evaluate(recursion_level))
             .collect();
         let result = match self {
-            Operation::Sum => values.iter().fold(0, |acc, x| acc + x),
-            Operation::Product => values.iter().fold(1, |acc, x| acc * x),
+            Operation::Sum => values.iter().sum(),
+            Operation::Product => values.iter().product(),
             Operation::Minimum => values.iter().copied().min().unwrap(),
             Operation::Maximum => values.iter().copied().max().unwrap(),
             Operation::Greater => {
@@ -85,7 +85,7 @@ enum Packet {
     Operator {
         version: u8,
         op: Operation,
-        subpackets: Vec<Box<Packet>>,
+        subpackets: Vec<Packet>,
     },
 }
 
@@ -281,14 +281,10 @@ fn extract_literal(mut bits: Bitstream) -> Result<(u64, Bitstream), String> {
 }
 
 fn sub_packets(operator_version: u8, operation: Operation, input: Vec<Packet>) -> Packet {
-    let mut pv: Vec<Box<Packet>> = Vec::with_capacity(input.len());
-    for packet in input {
-        pv.push(Box::new(packet));
-    }
     Packet::Operator {
         version: operator_version,
         op: operation,
-        subpackets: pv,
+        subpackets: input,
     }
 }
 
@@ -348,7 +344,7 @@ fn extract_packets(
 			    to_take.len()
 			);
                         bits = to_take.split_off(bitlen.into());
-                        let (got, unconsumed) = extract_packets(to_take, usize::MAX)?;
+                        let (got, _unconsumed) = extract_packets(to_take, usize::MAX)?;
                         println!("extract_packets: got subpackets {:#?}", got);
                         result.push(sub_packets(packet_version, op, got));
                     }
@@ -406,14 +402,14 @@ fn test_extract_packets() {
                     version: 1,
                     op: Operation::Less,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 6,
                             value: 10
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 2,
                             value: 20
-                        }),
+                        },
                     ]
                 }]
             );
@@ -453,7 +449,7 @@ fn gtv(s: &str) -> (u32, Vec<Packet>) {
     };
     println!("gtv: hex was {}, bits are {}", s, binstring(&bits));
     match extract_packets(bits, usize::MAX) {
-        Ok((packets, unconsumed)) => {
+        Ok((packets, _unconsumed)) => {
             let total = get_total_version(&packets);
             (total, packets)
         }
@@ -473,18 +469,18 @@ fn test_gtv() {
         vec![Packet::Operator {
             version: 4,
             op: Operation::Minimum,
-            subpackets: vec![Box::new(Packet::Operator {
+            subpackets: vec![Packet::Operator {
                 version: 1,
                 op: Operation::Minimum,
-                subpackets: vec![Box::new(Packet::Operator {
+                subpackets: vec![Packet::Operator {
                     version: 5,
                     op: Operation::Minimum,
-                    subpackets: vec![Box::new(Packet::Literal {
+                    subpackets: vec![Packet::Literal {
                         version: 6,
                         value: 15,
-                    })]
-                }),]
-            }),]
+                    }]
+                },]
+            },]
         }]
     );
 
@@ -497,34 +493,34 @@ fn test_gtv() {
             version: 3,
             op: Operation::Sum,
             subpackets: vec![
-                Box::new(Packet::Operator {
+                Packet::Operator {
                     version: 0,
                     op: Operation::Sum,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 0,
                             value: 10,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 5,
                             value: 11,
-                        })
+                        }
                     ]
-                }),
-                Box::new(Packet::Operator {
+                },
+                Packet::Operator {
                     version: 1,
                     op: Operation::Sum,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 0,
                             value: 12,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 3,
                             value: 13,
-                        })
+                        }
                     ]
-                })
+                }
             ]
         }]
     );
@@ -538,34 +534,34 @@ fn test_gtv() {
             version: 6,
             op: Operation::Sum,
             subpackets: vec![
-                Box::new(Packet::Operator {
+                Packet::Operator {
                     version: 0,
                     op: Operation::Sum,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 0,
                             value: 10,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 6,
                             value: 11,
-                        })
+                        }
                     ]
-                }),
-                Box::new(Packet::Operator {
+                },
+                Packet::Operator {
                     version: 4,
                     op: Operation::Sum,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 7,
                             value: 12,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 0,
                             value: 13,
-                        })
+                        }
                     ]
-                })
+                }
             ]
         }]
     );
@@ -579,36 +575,36 @@ fn test_gtv() {
             // outermost
             version: 5,
             op: Operation::Sum,
-            subpackets: vec![Box::new(Packet::Operator {
+            subpackets: vec![Packet::Operator {
                 version: 1,
                 op: Operation::Sum,
-                subpackets: vec![Box::new(Packet::Operator {
+                subpackets: vec![Packet::Operator {
                     version: 3,
                     op: Operation::Sum,
                     subpackets: vec![
-                        Box::new(Packet::Literal {
+                        Packet::Literal {
                             version: 7,
                             value: 6,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 6,
                             value: 6,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 5,
                             value: 12,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 2,
                             value: 15,
-                        }),
-                        Box::new(Packet::Literal {
+                        },
+                        Packet::Literal {
                             version: 2,
                             value: 15,
-                        }),
+                        },
                     ]
-                })]
-            })]
+                }]
+            }]
         }]
     );
 }
@@ -622,7 +618,7 @@ fn eval(s: &str) -> u64 {
     };
     println!("eval: hex was {}, bits are {}", s, binstring(&bits));
     match extract_packets(bits, usize::MAX) {
-        Ok((packets, unconsumed)) => {
+        Ok((packets, _unconsumed)) => {
             if packets.len() == 1 {
                 packets[0].evaluate(0)
             } else {
@@ -635,19 +631,19 @@ fn eval(s: &str) -> u64 {
     }
 }
 
-fn test_eval() {
-    assert_eq!(eval("C200B40A82"), 3);
-    assert_eq!(eval("04005AC33890"), 54);
-    assert_eq!(eval("880086C3E88112"), 7);
-    assert_eq!(eval("CE00C43D881120"), 9);
-    assert_eq!(eval("D8005AC2A8F0"), 0);
-    assert_eq!(eval("F600BC2D8F"), 0);
-    assert_eq!(eval("9C005AC2F8F0"), 0);
-    assert_eq!(eval("9C0141080250320F1802104A08"), 1);
-}
+//fn test_eval() {
+//    assert_eq!(eval("C200B40A82"), 3);
+//    assert_eq!(eval("04005AC33890"), 54);
+//    assert_eq!(eval("880086C3E88112"), 7);
+//    assert_eq!(eval("CE00C43D881120"), 9);
+//    assert_eq!(eval("D8005AC2A8F0"), 0);
+//    assert_eq!(eval("F600BC2D8F"), 0);
+//    assert_eq!(eval("9C005AC2F8F0"), 0);
+//    assert_eq!(eval("9C0141080250320F1802104A08"), 1);
+//}
 
 fn part1(s: &str) {
-    let (total, structure) = gtv(s);
+    let (total, _structure) = gtv(s);
     println!("Day 15 part 1: total = {}", total);
 }
 
@@ -663,7 +659,7 @@ fn main() {
             panic!("failed to read input: {}", e);
         }
     }
-    let no_newline: &str = input.strip_suffix("\n").unwrap_or(input.as_str());
+    let no_newline: &str = input.strip_suffix('\n').unwrap_or_else(|| input.as_str());
     part1(no_newline);
     part2(no_newline);
 }
