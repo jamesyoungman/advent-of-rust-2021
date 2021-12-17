@@ -631,16 +631,17 @@ fn eval(s: &str) -> u64 {
     }
 }
 
-//fn test_eval() {
-//    assert_eq!(eval("C200B40A82"), 3);
-//    assert_eq!(eval("04005AC33890"), 54);
-//    assert_eq!(eval("880086C3E88112"), 7);
-//    assert_eq!(eval("CE00C43D881120"), 9);
-//    assert_eq!(eval("D8005AC2A8F0"), 0);
-//    assert_eq!(eval("F600BC2D8F"), 0);
-//    assert_eq!(eval("9C005AC2F8F0"), 0);
-//    assert_eq!(eval("9C0141080250320F1802104A08"), 1);
-//}
+#[test]
+fn test_eval() {
+    assert_eq!(eval("C200B40A82"), 3);
+    assert_eq!(eval("04005AC33890"), 54);
+    assert_eq!(eval("880086C3E88112"), 7);
+    assert_eq!(eval("CE00C43D881120"), 9);
+    assert_eq!(eval("D8005AC2A8F0"), 1);
+    assert_eq!(eval("F600BC2D8F"), 0);
+    assert_eq!(eval("9C005AC2F8F0"), 0);
+    assert_eq!(eval("9C0141080250320F1802104A08"), 1);
+}
 
 fn part1(s: &str) {
     let (total, _structure) = gtv(s);
