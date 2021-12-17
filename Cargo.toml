@@ -7,6 +7,9 @@ authors = ["James Youngman <james@youngman.org>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+nom = "7"			# day 17
+tracing = "0.1"                 # day 17
+tracing-subscriber = "0.2"	# day 17
 ndarray = "0.15"		# day 09
 pathfinding = "3.0.5"           # day 15
 
