@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use std::cmp::{max, min};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
@@ -33,10 +33,7 @@ struct Bounds<T: Ord + Copy> {
 
 impl<T: Copy + Ord> Bounds<T> {
     fn new(min: T, max: T) -> Bounds<T> {
-        Bounds {
-            min,
-            max
-        }
+        Bounds { min, max }
     }
 
     fn update(&mut self, val: T) {
@@ -48,16 +45,11 @@ impl<T: Copy + Ord> Bounds<T> {
 #[derive(Debug, Clone)]
 struct ImageBoundingBox {
     x: Bounds<i64>,
-    y: Bounds<i64>
+    y: Bounds<i64>,
 }
 
 impl ImageBoundingBox {
-    fn new(
-        xmin: i64,
-        xmax: i64,
-        ymin: i64,
-        ymax: i64,
-    ) -> ImageBoundingBox {
+    fn new(xmin: i64, xmax: i64, ymin: i64, ymax: i64) -> ImageBoundingBox {
         ImageBoundingBox {
             x: Bounds::new(xmin, xmax),
             y: Bounds::new(ymin, ymax),
@@ -70,11 +62,9 @@ impl ImageBoundingBox {
     }
 
     fn get(&self) -> ((i64, i64), (i64, i64)) {
-        ((self.x.min, self.y.min),
-         (self.x.max, self.y.max))
+        ((self.x.min, self.y.min), (self.x.max, self.y.max))
     }
 }
-
 
 type Ordinate = i64;
 type Point = (Ordinate, Ordinate);
@@ -82,8 +72,8 @@ type Point = (Ordinate, Ordinate);
 #[derive(Debug, Clone)]
 struct Image {
     bounds: Option<ImageBoundingBox>,
-    pixels: HashSet<Point>,     // The set of non-default pixels.
-    default: bool,              // default pixel state
+    pixels: HashSet<Point>, // The set of non-default pixels.
+    default: bool,          // default pixel state
 }
 
 impl Display for Image {
@@ -91,7 +81,8 @@ impl Display for Image {
         match self.bounds.as_ref() {
             Some(b) => {
                 let ((left, top), (right, bottom)) = b.get();
-                for y in top..=bottom { // we're actually rendering upside down
+                for y in top..=bottom {
+                    // we're actually rendering upside down
                     for x in left..=right {
                         let lit = match self.pixels.contains(&(x, y)) {
                             true => !self.default,
@@ -104,7 +95,11 @@ impl Display for Image {
                 Ok(())
             }
             None => {
-                write!(f, "(no image bounds, {} non-default pixels)", self.pixels.len())
+                write!(
+                    f,
+                    "(no image bounds, {} non-default pixels)",
+                    self.pixels.len()
+                )
             }
         }
     }
@@ -144,12 +139,12 @@ impl Image {
             self.pixels.remove(&pos);
         } else {
             match &mut self.bounds {
-		None => {
+                None => {
                     self.bounds = Some(ImageBoundingBox::new(x, x, y, y));
-		}
-		Some(b) => {
+                }
+                Some(b) => {
                     b.update(x, y);
-		}
+                }
             }
             self.pixels.insert(pos);
         }
@@ -157,43 +152,22 @@ impl Image {
 
     fn count_lit_pixels(&self) -> Option<usize> {
         if self.default {
-            None		// an infinite number are lit
+            None // an infinite number are lit
         } else {
             Some(self.pixels.len())
         }
     }
-
-    //fn maybe_remove_left_and_top_margin(&mut self) {
-    //	match self.bounds.clone() {
-    //	    None => (),
-    //	    Some(b) => {
-    //		let ((left, top), (right, bottom)) = b.get();
-    //		let top_row_blank: bool = Self::all_default((left..=right).map(|x| (x, top)));
-    //		let left_col_blank: bool = Self::all_default((top..=bottom).map(|y| (left, y)));
-    //		if top_row_blank {
-    //		    top -= 1;
-    //		}
-    //		if left_col_blank {
-    //		    left += 1;
-    //		}
-    //		let newbounds = Some(ImageBoundingBox::new(left, right, bottom, top));
-    //		self.bounds = newbounds;
-    //		dbg!(b);
-    //		dbg!(newbounds);
-    //	    }
-    //	}
-    //}
 }
 
 fn parse_image(lines: &[&str]) -> Result<Image, BadInput> {
     fn convert_line(
-        s: &str,
+        line: &str,
         y: Ordinate,
-        w: Ordinate,
-        img: &mut Image
+        width: Ordinate,
+        img: &mut Image,
     ) -> Result<(), BadInput> {
         let mut count: Ordinate = 0;
-        for (x, ch) in s.chars().enumerate() {
+        for (x, ch) in line.chars().enumerate() {
             let x = x as Ordinate;
             count = x + 1;
             match get_pixel(ch) {
@@ -205,10 +179,10 @@ fn parse_image(lines: &[&str]) -> Result<Image, BadInput> {
                 }
             }
         }
-        if count != w {
+        if count != width {
             Err(BadInput(format!(
                 "expected {} pixels on line {}, got {}",
-                w, y, count
+                width, y, count
             )))
         } else {
             Ok(())
@@ -224,8 +198,6 @@ fn parse_image(lines: &[&str]) -> Result<Image, BadInput> {
     for (y, line) in lines.iter().enumerate() {
         convert_line(line, y as Ordinate, width, &mut image)?;
     }
-    println!("parse_image: input\n{:?}\ntranslated to image\n{}\n",
-             lines, image);
     Ok(image)
 }
 
@@ -268,14 +240,12 @@ fn parse_input(lines: &[&str]) -> Result<(Vec<bool>, Image), BadInput> {
 }
 
 fn get_input_num(image: &Image, x: Ordinate, y: Ordinate) -> u32 {
-    let getpixel = |dx: i64, dy: i64| -> bool {
-	image.get_pixel(x + dx, y + dy)
-    };
+    let getpixel = |dx: i64, dy: i64| -> bool { image.get_pixel(x + dx, y + dy) };
     let mut result: u32 = 0;
     for dy in -1..=1 {
         for dx in -1..=1 {
             result <<= 1;
-            let lit  = getpixel(dx, dy);
+            let lit = getpixel(dx, dy);
             if lit {
                 result |= 1;
             }
@@ -284,6 +254,7 @@ fn get_input_num(image: &Image, x: Ordinate, y: Ordinate) -> u32 {
     result
 }
 
+#[cfg(test)]
 const SAMPLE_PROGRAM: &str = concat!(
     "..#.#..#####.#.#.#.###.##.....###.##.#..###.####..#####..#....#..#..##..##",
     "#..######.###...####..#..#####..##..#.#####...##.#.#..#.##..#.#......#.###",
@@ -291,18 +262,15 @@ const SAMPLE_PROGRAM: &str = concat!(
     ".#..#..##..#...##.######.####.####.#.#...#.......#..#.#.#...####.##.#.....",
     ".#..#...##.#.##..#...##.#.##..###.#......#.#.......#.#.#.####.###.##...#..",
     "...####.#..#..#.##.#....##..#.####....##...##..#...#......#.#.......#.....",
-    "..##..####..#...#.#.#...##..#.#..###..#####........#..####......#..#");
-
-const SMALL_SAMPLE_IMAGE: &str = concat!(
-    "#..#.\n",
-    "#....\n",
-    "##..#\n",
-    "..#..\n",
-    "..###\n"
+    "..##..####..#...#.#.#...##..#.#..###..#####........#..####......#..#"
 );
+
+#[cfg(test)]
+const SMALL_SAMPLE_IMAGE: &str = concat!("#..#.\n", "#....\n", "##..#\n", "..#..\n", "..###\n");
 
 /// LARGE_SAMPLE_IMAGE has the same pixels lit as SMALL_SAMPLE_IMAGE, but with
 /// an offset in both the x and y directions.
+#[cfg(test)]
 const LARGE_SAMPLE_IMAGE: &str = concat!(
     "...............\n",
     "...............\n",
@@ -329,7 +297,6 @@ fn test_get_input_num() {
     assert_eq!(get_input_num(&img, 2, 2), 34);
 }
 
-
 fn compute_enhanced_pixel(num: u32, program: &[bool]) -> bool {
     match program.get(num as usize) {
         Some(v) => *v,
@@ -341,17 +308,15 @@ fn compute_enhanced_pixel(num: u32, program: &[bool]) -> bool {
 
 #[test]
 fn test_compute_enhanced_pixel() {
-    let program: Vec<bool> = parse_program(SAMPLE_PROGRAM)
-        .expect("valid test input");
-    assert_eq!(compute_enhanced_pixel(34, &program),
-               true);
+    let program: Vec<bool> = parse_program(SAMPLE_PROGRAM).expect("valid test input");
+    assert_eq!(compute_enhanced_pixel(34, &program), true);
 }
 
 fn enhance(program: &[bool], input: &Image) -> Image {
     let new_default = if input.default {
-	// Pixels not recorded in input.pixels are lit.  In the next
-	// generation their state will be set to program[511] because
-	// their neighbours are lit.
+        // Pixels not recorded in input.pixels are lit.  In the next
+        // generation their state will be set to program[511] because
+        // their neighbours are lit.
         program[511]
     } else {
         program[0]
@@ -360,9 +325,9 @@ fn enhance(program: &[bool], input: &Image) -> Image {
     match input.bounds() {
         None => (),
         Some(b) => {
-            let ((left, top), (right, bottom)) = dbg!(b.get());
-            for y in (top-1)..=(bottom+1) {
-                for x in (left-1)..=(right+1) {
+            let ((left, top), (right, bottom)) = b.get();
+            for y in (top - 1)..=(bottom + 1) {
+                for x in (left - 1)..=(right + 1) {
                     let input_num: u32 = get_input_num(input, x, y);
                     output.set_pixel(x, y, compute_enhanced_pixel(input_num, program));
                 }
@@ -383,57 +348,61 @@ fn test_bounding_box() {
     assert_eq!(small_image.to_string(), large_image.to_string());
 }
 
-
 #[test]
 fn test_enhance() {
-    let program: Vec<bool> =  parse_program(SAMPLE_PROGRAM)
-        .expect("valid test input");
+    let program: Vec<bool> = parse_program(SAMPLE_PROGRAM).expect("valid test input");
     let image_lines: Vec<&str> = LARGE_SAMPLE_IMAGE.split_terminator('\n').collect();
     let gen0: Image = parse_image(&image_lines).expect("valid sample image");
     let gen1: Image = enhance(&program, &gen0);
     println!("gen0:\n{}\ngen1:\n{}\n", &gen0, &gen1);
-    assert_eq!(gen1.to_string(),
-               concat!(
-                   ".##.##.\n",
-                   "#..#.#.\n",
-                   "##.#..#\n",
-                   "####..#\n",
-                   ".#..##.\n",
-                   "..##..#\n",
-                   "...#.#.\n",
-               ));
+    assert_eq!(
+        gen1.to_string(),
+        concat!(
+            ".##.##.\n",
+            "#..#.#.\n",
+            "##.#..#\n",
+            "####..#\n",
+            ".#..##.\n",
+            "..##..#\n",
+            "...#.#.\n",
+        )
+    );
     let gen2: Image = enhance(&program, &gen1);
     println!("gen2:\n{}\n", &gen2);
-    assert_eq!(gen2.to_string(),
-               concat!(
-		   ".......#.\n",
-		   ".#..#.#..\n",
-		   "#.#...###\n",
-		   "#...##.#.\n",
-		   "#.....#.#\n",
-		   ".#.#####.\n",
-		   "..#.#####\n",
-		   "...##.##.\n",
-		   "....###..\n",
-	       ));
+    assert_eq!(
+        gen2.to_string(),
+        concat!(
+            ".......#.\n",
+            ".#..#.#..\n",
+            "#.#...###\n",
+            "#...##.#.\n",
+            "#.....#.#\n",
+            ".#.#####.\n",
+            "..#.#####\n",
+            "...##.##.\n",
+            "....###..\n",
+        )
+    );
 
     let mut img = gen0.clone();
     for _iter in 1..=50 {
-	img = enhance(&program, &img);
+        img = enhance(&program, &img);
     }
     assert_eq!(Some(3351), img.count_lit_pixels());
 }
 
-
 fn part1(program: &[bool], image: &Image) {
     let doubly_enhanced = enhance(program, &enhance(program, image));
-    println!("Day 20 part 1: pixels lit: {:?}", doubly_enhanced.count_lit_pixels());
+    println!(
+        "Day 20 part 1: pixels lit: {:?}",
+        doubly_enhanced.count_lit_pixels()
+    );
 }
 
 fn part2(program: &[bool], original_image: &Image) {
     let mut img = original_image.clone();
     for _iter in 1..=50 {
-	img = enhance(&program, &img);
+        img = enhance(program, &img);
     }
     println!("Day 20 part 2: pixels lit: {:?}", img.count_lit_pixels());
 }
