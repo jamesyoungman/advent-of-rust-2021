@@ -25,7 +25,7 @@ fn get_pixel(ch: char) -> Result<bool, BadInput> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Bounds<T: Ord + Copy> {
     min: T,
     max: T,
@@ -45,7 +45,7 @@ impl<T: Copy + Ord> Bounds<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ImageBoundingBox {
     x: Bounds<i64>,
     y: Bounds<i64>
@@ -79,7 +79,7 @@ impl ImageBoundingBox {
 type Ordinate = i64;
 type Point = (Ordinate, Ordinate);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Image {
     bounds: Option<ImageBoundingBox>,
     pixels: HashSet<Point>,     // The set of non-default pixels.
@@ -160,14 +160,6 @@ impl Image {
             None		// an infinite number are lit
         } else {
             Some(self.pixels.len())
-        }
-    }
-
-    fn count_unlit_pixels(&self) -> Option<usize> {
-        if self.default {
-            Some(self.pixels.len())
-        } else {
-            None		// an infinite number are unlit
         }
     }
 
@@ -424,13 +416,26 @@ fn test_enhance() {
 		   "...##.##.\n",
 		   "....###..\n",
 	       ));
+
+    let mut img = gen0.clone();
+    for _iter in 1..=50 {
+	img = enhance(&program, &img);
+    }
+    assert_eq!(Some(3351), img.count_lit_pixels());
 }
 
 
 fn part1(program: &[bool], image: &Image) {
     let doubly_enhanced = enhance(program, &enhance(program, image));
-    // 5547 is too high
     println!("Day 20 part 1: pixels lit: {:?}", doubly_enhanced.count_lit_pixels());
+}
+
+fn part2(program: &[bool], original_image: &Image) {
+    let mut img = original_image.clone();
+    for _iter in 1..=50 {
+	img = enhance(&program, &img);
+    }
+    println!("Day 20 part 2: pixels lit: {:?}", img.count_lit_pixels());
 }
 
 fn run() -> Result<(), String> {
@@ -459,6 +464,7 @@ fn run() -> Result<(), String> {
         Err(e) => Err(e.to_string()),
         Ok((program, image)) => {
             part1(&program, &image);
+            part2(&program, &image);
             Ok(())
         }
     }
