@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::cmp::{max, min, Ordering};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::io::prelude::*;
+use std::ops::RangeInclusive;
 use std::str::FromStr;
 
 use nom::{
@@ -512,138 +514,294 @@ fn solve1(program: &[Instruction]) -> Result<Option<Word>, BadProgram> {
 mod symbolic {
     use super::*;
 
-    #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-    pub enum DeferredOperand {
+    fn ranges_are_disjoint(left: &RangeInclusive<Word>,
+			   right: &RangeInclusive<Word>) -> bool {
+	    left.end() < right.start() ||  left.start() > right.end()
+    }
+
+    fn intersect_ranges(left: &RangeInclusive<Word>,
+			right: &RangeInclusive<Word>) -> RangeInclusive<Word> {
+	let begin = *max(left.start(), right.start());
+	let end = *min(left.end(), right.end());
+	begin..=end
+    }
+
+    #[derive(Debug, Clone, Eq)]
+    pub enum Expression {
 	Literal(Word),
-	Input(u8),
-	BinaryOperation{
+	Input {
+	    digit: u8,
+	    range: RangeInclusive<Word>,
+	},
+	BinaryOp {
+	    range: RangeInclusive<Word>,
 	    op: BinaryOpcode,
-	    left: Box<DeferredOperand>,
-	    right: Box<DeferredOperand>,
+	    left: Box<Expression>,
+	    right: Box<Expression>,
 	},
     }
 
-
-    fn simplify_input_equality(input_number: u8, other: DeferredOperand) -> DeferredOperand {
-	match &other {
-	    // No input is zero or greater than 9.
-	    DeferredOperand::Literal(n) if *n == 0 || *n > 9 => DeferredOperand::Literal(0),
-	    _ => DeferredOperand::BinaryOperation {
-		op: BinaryOpcode::Eql,
-		left: Box::new(DeferredOperand::Input(input_number)),
-		right: Box::new(other),
-	    }
-	}
-    }
-
-    fn simplify_add(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
-	match commuting_pair(left, right) {
-	    (x, DeferredOperand::Literal(0)) | (DeferredOperand::Literal(0), x) => x,
-	    (l, r) if l == r => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Mul,
-		    left: Box::new(l),
-		    right: Box::new(DeferredOperand::Literal(2)),
-		}
-	    }
-	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
-		DeferredOperand::Literal(a + b)
-	    }
-	    (l, r) => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Add,
-		    left: Box::new(l),
-		    right: Box::new(r),
+    impl Display for Expression {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	    match self {
+		Expression::Literal(w) => write!(f, "{}", w),
+		Expression::Input{ digit, .. } => write!(f, "i{}", digit),
+		Expression::BinaryOp { op, left, right, .. } => {
+		    let operation_symbol: &str = match op {
+			BinaryOpcode::Add => "+",
+			BinaryOpcode::Mul => "*",
+			BinaryOpcode::Div => "/",
+			BinaryOpcode::Mod => "%",
+			BinaryOpcode::Eql => "==",
+		    };
+		    write!(f, "({}{}{})", left, operation_symbol, right)
 		}
 	    }
 	}
     }
 
-    fn simplify_mul(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
-	match commuting_pair(left, right) {
-	    (_, DeferredOperand::Literal(0)) | (DeferredOperand::Literal(0), _) => DeferredOperand::Literal(0),
-	    (x, DeferredOperand::Literal(1)) | (DeferredOperand::Literal(1), x) => x,
-	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
-		DeferredOperand::Literal(a * b)
-	    }
-
-	    // Factorise (a+b)(a+d) to a(b+d).
-	    (
-		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: a, right: b, },
-		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: c, right: d, }
-	    ) if a == c => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Mul,
-		    left: a,
-		    right: Box::new(DeferredOperand::BinaryOperation {
-			op: BinaryOpcode::Add,
-			left: b,
-			right: d,
-		    }),
-		}
-	    }
-
-	    // Factorise (a+b)(c+b) to b(a+c).
-	    (
-		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: a, right: b, },
-		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: c, right: d, }
-	    ) if b == d => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Mul,
-		    left: b,
-		    right: Box::new(DeferredOperand::BinaryOperation {
-			op: BinaryOpcode::Add,
-			left: a,
-			right: c,
-		    }),
-		}
-	    }
-
-	    (l, r) => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Mul,
-		    left: Box::new(l),
-		    right: Box::new(r),
-		}
-	    }
+    impl From<Word> for Expression {
+	fn from(w: Word) -> Expression {
+	    Expression::Literal(w)
 	}
     }
 
-    fn simplify_div(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
-	match (left, right) {
-	    (x, DeferredOperand::Literal(1)) | (DeferredOperand::Literal(1), x) => x,
-	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
-		DeferredOperand::Literal(a / b)
-	    }
-	    (l, r) => {
-		if l == r {
-		    DeferredOperand::Literal(1)
-		} else {
-		    DeferredOperand::BinaryOperation {
-			op: BinaryOpcode::Div,
-			left: Box::new(l),
-			right: Box::new(r),
+    impl Ord for Expression {
+	fn cmp(&self, other: &Self) -> Ordering {
+	    match self {
+		Expression::Literal(left) => match other {
+		    Expression::Literal(right) => left.cmp(right),
+		    _ => Ordering::Greater,
+		}
+		Expression::Input{ digit: left, .. } => match other {
+		    Expression::Literal(_) => Ordering::Less,
+		    Expression::Input{ digit: right, .. } => left.cmp(right),
+		    _ => Ordering::Greater,
+		}
+		Expression::BinaryOp { range: _, op: self_op, left: self_left, right: self_right } => {
+		    match other {
+			Expression::Literal(_) | Expression::Input{..} => Ordering::Less,
+			Expression::BinaryOp { range: _, op: other_op, left: other_left, right: other_right } => {
+			    let result = self_op.cmp(other_op);
+			    if result != Ordering::Equal {
+				return result;
+			    }
+			    let result = self_left.cmp(other_left);
+			    if result != Ordering::Equal {
+				return result;
+			    }
+			    self_right.cmp(other_right)
+			}
 		    }
 		}
 	    }
 	}
     }
 
-    fn simplify_mod(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
-	match (left, right) {
-	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
-		DeferredOperand::Literal(a % b)
+    impl PartialOrd for Expression {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+	}
+    }
+
+    impl PartialEq for Expression {
+	fn eq(&self, other: &Self) -> bool {
+            self.cmp(other) == Ordering::Equal
+	}
+    }
+
+    impl Expression {
+	fn range(&self) -> RangeInclusive<Word> {
+	    match self {
+		Expression::Literal(n) => *n..=*n,
+		Expression::Input{ range, .. } => range.clone(),
+		Expression::BinaryOp { range, .. } => range.clone(),
 	    }
-	    (l, r) if l == r => {
-		DeferredOperand::Literal(0)
+	}
+
+	fn has_disjoint_range(&self, other: &Self) -> bool {
+	    ranges_are_disjoint(&self.range(), &other.range())
+	}
+
+	fn from_input(which: u8) -> Expression {
+	    Expression::Input {
+		digit: which,
+		range: 1..=9,
 	    }
-	    (l, r) => {
-		DeferredOperand::BinaryOperation {
-		    op: BinaryOpcode::Mod,
-		    left: Box::new(l),
-		    right: Box::new(r),
+	}
+
+	fn known_to_be_zero(&self) -> bool {
+	    match self {
+		Expression::Literal(0) => true,
+		_ => false,
+	    }
+	}
+
+	fn deduce_eql_range(left: &Expression, right: &Expression) -> RangeInclusive<Word> {
+	    if left == right {
+		1..=1
+	    } else {
+		if left.has_disjoint_range(right) {
+		    0..=0
+		} else {
+		    0..=1
 		}
 	    }
+	}
+
+	fn deduce_mul_range(left: &Expression, right: &Expression) -> RangeInclusive<Word> {
+	    let vals = [*left.range().start(), *left.range().end(), *right.range().start(), *right.range().end()];
+	    let endpoints = vals.iter().fold(
+		(vals[0], vals[0]),
+		|acc, val| (min(acc.0, *val), max(acc.1, *val)));
+	    (endpoints.0)..=(endpoints.1)
+	}
+
+	fn deduce_add_range(left: &Expression, right: &Expression) -> RangeInclusive<Word> {
+	    let begin = left.range().start() + right.range().start();
+	    let end = left.range().end() + right.range().end();
+	    begin..=end
+	}
+
+	fn deduce_div_range(left: &Expression, right: &Expression) -> RangeInclusive<Word> {
+	    if left.range().start() >= &0 && right.range().start() >= &0 {
+		(left.range().start()/right.range().end())..=(left.range().end()/right.range().start())
+	    } else {
+		todo!()
+	    }
+	}
+
+	fn mul(a: Box<Expression>, b: Box<Expression>) -> Expression {
+	    let range = Expression::deduce_mul_range(&a, &b);
+	    Expression::BinaryOp {
+		op: BinaryOpcode::Mul,
+		left: a,
+		right: b,
+		range,
+	    }
+	}
+
+	fn add(a: Box<Expression>, b: Box<Expression>) -> Expression {
+	    let range = Expression::deduce_add_range(&a, &b);
+	    Expression::BinaryOp {
+		op: BinaryOpcode::Add,
+		left: a,
+		right: b,
+		range,
+	    }
+	}
+
+	fn eql(a: Box<Expression>, b: Box<Expression>) -> Expression {
+	    Expression::BinaryOp {
+		op: BinaryOpcode::Eql,
+		left: a,
+		right: b,
+		range: 0..=1,
+	    }
+	}
+    }
+
+
+    fn simplify_input_equality(
+	digit: u8,
+	range: &RangeInclusive<Word>,
+	other: Expression,
+    ) -> Expression {
+	match &other {
+	    // No input is zero or greater than 9.
+	    Expression::Literal(n) if *n == 0 || *n > 9 => Expression::from(0),
+	    Expression::Input { digit: other_digit, .. } if digit == *other_digit => Expression::from(1),
+	    Expression::BinaryOp { range: other_range, .. } if ranges_are_disjoint(range, other_range) =>
+		Expression::from(0),
+	    _ => {
+		Expression::eql(
+		    Box::new(Expression::Input {
+			digit,
+			range: range.clone(),
+		    }),
+		    Box::new(other))
+	    }
+	}
+    }
+
+    fn simplify_add(left: Expression, right: Expression) -> Expression {
+	match commuting_pair(left, right) {
+	    (x, expr) | (expr, x) if expr.known_to_be_zero() => x,
+	    (l, r) if l == r => Expression::mul(
+		Box::new(Expression::from(2)),
+		Box::new(l)
+	    ),
+	    (Expression::Literal(a), Expression::Literal(b)) => {
+		Expression::from(a + b)
+	    }
+	    (l, r) => Expression::add(
+		Box::new(l),
+		Box::new(r),
+	    ),
+	}
+    }
+
+    fn simplify_mul(left: Expression, right: Expression) -> Expression {
+	match commuting_pair(left, right) {
+	    (_, exp) | (exp, _) if exp.known_to_be_zero() => Expression::from(0),
+	    (x, Expression::Literal(1)) | (Expression::Literal(1), x) => x,
+	    (Expression::Literal(a), Expression::Literal(b)) => {
+		Expression::from(a * b)
+	    }
+
+	    // Factorise (a+b)(a+d) to a(b+d).
+	    (
+		Expression::BinaryOp { op: BinaryOpcode::Add, left: a, right: b, range: _},
+		Expression::BinaryOp { op: BinaryOpcode::Add, left: c, right: d, range: _},
+	    ) if a == c => Expression::mul(a, Box::new(Expression::add(b, d))),
+
+	    // Factorise (a+b)(c+b) to b(a+c).
+	    (
+		Expression::BinaryOp { op: BinaryOpcode::Add, left: a, right: b, range: _},
+		Expression::BinaryOp { op: BinaryOpcode::Add, left: c, right: d, range: _},
+	    ) if b == d => {
+		// XXX: we may know the range of a+c already.
+		Expression::mul(b, Box::new(Expression::add(a, c)))
+	    }
+
+	    // XXX: reorganise so we don't discard range information.
+	    (l, r) => Expression::mul(Box::new(l), Box::new(r)),
+	}
+    }
+
+    fn simplify_div(left: Expression, right: Expression) -> Expression {
+	match (left, right) {
+	    (x, Expression::Literal(1)) | (Expression::Literal(1), x) => x,
+	    (Expression::Literal(a), Expression::Literal(b)) => Expression::from(a / b),
+	    (l, r) => {
+		if l == r {
+		    Expression::from(1)
+		} else {
+		    let range = Expression::deduce_div_range(&l, &r);
+		    Expression::BinaryOp {
+			op: BinaryOpcode::Div,
+			left: Box::new(l),
+			right: Box::new(r),
+			range,
+		    }
+		}
+	    }
+	}
+    }
+
+    fn simplify_mod(left: Expression, right: Expression) -> Expression {
+	match (left, right) {
+	    (Expression::Literal(a), Expression::Literal(b)) => Expression::from(a % b),
+	    (l, r) if l == r => Expression::from(0),
+	    (l, Expression::Literal(modulus)) => {
+		Expression::BinaryOp {
+		    op: BinaryOpcode::Mod,
+		    left: Box::new(l),
+		    right: Box::new(Expression::from(modulus)),
+		    range: 0..=modulus,
+		}
+	    }
+	    _ => todo!(),
 	}
     }
 
@@ -653,7 +811,7 @@ mod symbolic {
     ///
     /// This is based on the idea that for any commutative operation @, (a
     /// @ b) = (b @ a) for any a, b.
-    fn commuting_pair(left: DeferredOperand, right: DeferredOperand) -> (DeferredOperand, DeferredOperand) {
+    fn commuting_pair(left: Expression, right: Expression) -> (Expression, Expression) {
 	if left < right {
 	    (left, right)
 	} else {
@@ -664,11 +822,14 @@ mod symbolic {
     /// Simplify (a @ b) = (c @ d)
     fn simplify_commutative_equality(
 	the_op: BinaryOpcode,
-	a: DeferredOperand,
-	b: DeferredOperand,
-	c: DeferredOperand,
-	d: DeferredOperand,
-    ) -> DeferredOperand {
+	a: Expression,
+	b: Expression,
+	left_range: RangeInclusive<Word>,
+	c: Expression,
+	d: Expression,
+	right_range: RangeInclusive<Word>,
+	expr_range: RangeInclusive<Word>,
+    ) -> Expression {
 	assert!(the_op == BinaryOpcode::Add || the_op == BinaryOpcode::Mul);
 
 	if a == c {
@@ -680,90 +841,125 @@ mod symbolic {
 	} else if b == d {
 	    simplify_eql(a, c)
 	} else {
-	    DeferredOperand::BinaryOperation {
+	    let left = Expression::BinaryOp {
+		op: the_op,
+		left: Box::new(a),
+		right: Box::new(b),
+		range: left_range,
+	    };
+	    let right = Expression::BinaryOp {
+		op: the_op,
+		left: Box::new(c),
+		right: Box::new(d),
+		range: right_range,
+	    };
+	    Expression::BinaryOp {
 		op: BinaryOpcode::Eql,
-		left: Box::new(DeferredOperand::BinaryOperation {
-		    op: the_op,
-		    left: Box::new(a),
-		    right: Box::new(b),
-		}),
-		right: Box::new(DeferredOperand::BinaryOperation {
-		    op: the_op,
-		    left: Box::new(c),
-		    right: Box::new(d),
-		}),
+		left: Box::new(left),
+		right: Box::new(right),
+		range: expr_range,
 	    }
 	}
     }
 
-    fn simplify_eql(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
-	match commuting_pair(left, right) {
-	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+    fn simplify_eql(
+	left: Expression,
+	right: Expression,
+    ) -> Expression {
+	match &commuting_pair(left, right) {
+	    (Expression::Literal(a), Expression::Literal(b)) => {
 		if a == b {
-		    DeferredOperand::Literal(1)
+		    Expression::from(1)
 		} else {
-		    DeferredOperand::Literal(0)
+		    Expression::from(0)
 		}
 	    }
-	    (DeferredOperand::Input(a), DeferredOperand::Input(b)) if a == b => {
-		DeferredOperand::Literal(1)
-	    }
-	    (DeferredOperand::Input(inp), other)  | (other, DeferredOperand::Input(inp))  => {
-		simplify_input_equality(inp, other)
+	    (Expression::Input{ digit, range }, other)  | (other, Expression::Input{ digit, range })  => {
+		simplify_input_equality(*digit, range, other.clone())
 	    }
 
-	    (l, r) if l == r => DeferredOperand::Literal(1),
+	    (l, r) if l == r => Expression::from(1),
+
+	    (l, r) if l.has_disjoint_range(r) => {
+		Expression::from(0)
+	    }
 
 	    // simplify (a @ b) = (c @ d) for any commutative operation @.
 	    (
 		// left is a @ b
-		DeferredOperand::BinaryOperation {
+		Expression::BinaryOp {
 		    op: left_op,
 		    left: a,
 		    right: b,
+		    range: left_range,
 		},
 		// right is c @ d.
-		DeferredOperand::BinaryOperation {
+		Expression::BinaryOp {
 		    op: right_op,
 		    left: c,
 		    right: d,
+		    range: right_range,
 		},
 	    ) if left_op == right_op => {
-		simplify_commutative_equality(left_op, *a, *b, *c, *d)
+		// XXX: when we have implemented deduced properties as
+		// attributes of Expression, then this case may
+		// discard things we know about left or right.
+		simplify_commutative_equality(
+		    *left_op,
+		    *(*a).clone(), *(*b).clone(), left_range.clone(),
+		    *(*c).clone(), *(*d).clone(), right_range.clone(),
+		    0..=1)
 	    }
 
 	    (l, r) => {
-		DeferredOperand::BinaryOperation {
+		Expression::BinaryOp {
 		    op: BinaryOpcode::Eql,
-		    left: Box::new(l),
-		    right: Box::new(r),
+		    left: Box::new(l.clone()),
+		    right: Box::new(r.clone()),
+		    range: 0..=1,
 		}
 	    }
 	}
     }
 
-
-    fn simplify(input: DeferredOperand) -> DeferredOperand {
-	match input {
-	    DeferredOperand::Literal(_) | DeferredOperand::Input(_) => input,
-	    DeferredOperand::BinaryOperation{ op, left, right } => {
-		match (op, *left, *right) {
-		    (BinaryOpcode::Add, l, r) => simplify_add(l, r),
-		    (BinaryOpcode::Mul, l, r) => simplify_mul(l, r),
-		    (BinaryOpcode::Div, l, r) => simplify_div(l, r),
-		    (BinaryOpcode::Mod, l, r) => simplify_mod(l, r),
-		    (BinaryOpcode::Eql, l, r) => simplify_eql(l, r),
-		}
+    fn collapse_degenerate_range(input: Expression) -> Expression {
+	if let Expression::Literal(_) = &input {
+	    input
+	} else {
+	    let range = input.range();
+	    if range.start() == range.end() {
+		println!("replacing {} with literal {}", &input, range.start());
+		Expression::Literal(*range.start())
+	    } else {
+		input
 	    }
 	}
     }
 
+    fn simplify(input: Expression) -> Expression {
+	collapse_degenerate_range(
+	    match input {
+		Expression::Literal(_) => input,
+		Expression::Input{..} => input,
+		Expression::BinaryOp{ op, left, right, range: _range } => {
+		    // XXX: preserve/use range value
+		    match (op, *left, *right) {
+			(BinaryOpcode::Add, l, r) => simplify_add(l, r),
+			(BinaryOpcode::Mul, l, r) => simplify_mul(l, r),
+			(BinaryOpcode::Div, l, r) => simplify_div(l, r),
+			(BinaryOpcode::Mod, l, r) => simplify_mod(l, r),
+			(BinaryOpcode::Eql, l, r) => simplify_eql(l, r),
+		    }
+		}
+	    }
+	)
+    }
 
-    pub fn symbolic_expression(program: &[Instruction]) -> DeferredOperand {
-	let mut registers: HashMap<Reg, DeferredOperand> = {
+    pub fn symbolic_expression(program: &[Instruction]) -> Expression {
+	let mut registers: HashMap<Reg, Expression> = {
 	    let mut regs = HashMap::new();
 	    for r in [Reg::W, Reg::X, Reg::Y, Reg::Z] {
-		regs.insert(r, DeferredOperand::Literal(0));
+		regs.insert(r, Expression::from(0));
 	    }
 	    regs
 	};
@@ -772,26 +968,32 @@ mod symbolic {
 	    println!("symbolic_expression: {:>03}: including {}", i, &instruction);
 	    match instruction {
 		Instruction::Inp{dest} => {
-		    registers.insert(*dest, DeferredOperand::Input(inputs_consumed));
+		    registers.insert(*dest, Expression::from_input(inputs_consumed));
 		    inputs_consumed += 1;
 		}
 		Instruction::Binary{op, dest, src} => {
-		    let right: Box<DeferredOperand> = match src {
+		    let right: Box<Expression> = match src {
 			Operand::Register(src) => match registers.get(src) {
 			    Some(val) => Box::new(val.clone()),
 			    None => {
 				panic!("unknown source register {}", src);
 			    }
 			}
-			Operand::Literal(n) => Box::new(DeferredOperand::Literal(*n)),
+			Operand::Literal(n) => Box::new(Expression::from(*n)),
 		    };
 		    if let Some(lop) = registers.remove(dest) {
-			let left: Box<DeferredOperand> = Box::new(lop);
-			registers.insert(*dest, simplify(DeferredOperand::BinaryOperation {
-			    op: *op,
-			    left,
-			    right,
-			}));
+			let range = lop.range().clone();
+			let left: Box<Expression> = Box::new(lop);
+			registers.insert(*dest,
+					 simplify(
+					     Expression::BinaryOp {
+						 op: *op,
+						 left,
+						 right,
+						 range,
+					     }
+					 )
+			);
 		    } else {
 			panic!("unknown destination register {}", dest);
 		    }
@@ -799,6 +1001,39 @@ mod symbolic {
 	    }
 	}
 	registers.get(&Reg::Z).unwrap().clone()
+    }
+
+    fn constrain(
+	input: Expression,
+	range: &RangeInclusive<Word>
+    ) -> Expression {
+	match input {
+	    Expression::Literal(n) => {
+		if !range.contains(&n) {
+		    panic!("constraining expression to range {:?} but the expression is {:?}", range, input);
+		}
+		Expression::Literal(n)
+	    }
+	    Expression::Input { digit, range: input_range, } => {
+		if ranges_are_disjoint(&input_range, range) {
+		    panic!("constraining expression to range {:?} but the expression has range {:?}", &range, &input_range);
+		}
+		Expression::Input { digit, range: intersect_ranges(range, &input_range) }
+	    }
+	    Expression::BinaryOp { range: bop_range, op, left, right } => {
+		Expression::BinaryOp {
+		    range: intersect_ranges(range, &bop_range),
+		    op,
+		    left,
+		    right,
+		}
+	    }
+	}
+    }
+
+    pub fn constrain_to_zero(input: Expression) -> Expression {
+	let just_zero = 0..=0;
+	constrain(input, &just_zero)
     }
 }
 
@@ -844,7 +1079,8 @@ fn run() -> Result<(), String> {
         Err(e) => Err(e.to_string()),
         Ok(program) => {
 	    let sym = symbolic::symbolic_expression(&program);
-	    println!("symbolic form of program is {:#?}", sym);
+	    let constrained = symbolic::constrain_to_zero(sym);
+	    println!("symbolic form of program is {}", constrained);
             //part1(&program);
             //part2(&program);
             Ok(())
