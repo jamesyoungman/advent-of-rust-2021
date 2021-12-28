@@ -111,7 +111,7 @@ impl Display for BinaryOpcode {
 pub enum Instruction {
     Binary {
         op: BinaryOpcode,
-        dest: Reg,
+       dest: Reg,
         src: Operand,
     },
     Inp {
@@ -228,7 +228,7 @@ struct ArithmeticUnit {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct BadProgram(String);
+pub struct BadProgram(String);
 
 impl Display for BadProgram {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -1037,14 +1037,104 @@ mod symbolic {
     }
 }
 
+mod nfa {
+    use super::*;
+
+    #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone)]
+    struct State {
+	w: Word,
+	x: Word,
+	y: Word,
+	z: Word,
+    }
+
+    impl State {
+	fn get(&self, r: &Reg) -> Word {
+	    match r {
+		Reg::W => self.w,
+		Reg::X => self.x,
+		Reg::Y => self.y,
+		Reg::Z => self.z,
+	    }
+	}
+
+	fn set(self, r: &Reg, value: Word) -> Self {
+	    match r {
+		Reg::W => Self { w: value, ..self },
+		Reg::X => Self { x: value, ..self },
+		Reg::Y => Self { y: value, ..self },
+		Reg::Z => Self { z: value, ..self },
+	    }
+	}
+    }
+
+    fn eval_op(state: State, op: &BinaryOpcode, dest: &Reg, src: &Operand) -> Result<State, BadProgram> {
+	let src_val: Word = match src {
+	    Operand::Register(r) => state.get(&r),
+	    Operand::Literal(w) => *w,
+	};
+	let dst_val: Word = state.get(&dest);
+	let result: Word = op.execute(dst_val, src_val)?;
+	Ok(state.set(&dest, result))
+    }
+
+    pub fn execute(program: &[Instruction]) -> Result<Option<i64>, BadProgram> {
+	const DIGITS: [i64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+	let mut inputs_consumed: usize = 0;
+	let mut largest_input_for_state: HashMap<State, i64> = HashMap::new();
+	largest_input_for_state.insert(State{w: 0, x: 0, y: 0, z: 0}, 0);
+	for (i, instruction) in program.iter().enumerate() {
+	    println!(
+		"Step {:>3} (consumed {:>2} inputs, tracking {:>9} states): {}",
+		i,
+		inputs_consumed,
+		largest_input_for_state.len(),
+		&instruction,
+	    );
+
+	    let mut next: HashMap<State, i64> = HashMap::new();
+	    match instruction {
+		Instruction::Inp { dest } => {
+		    inputs_consumed += 1;
+		    for (curr_state, max_input) in largest_input_for_state.drain() {
+			for digit in DIGITS {
+			    let n = max_input * 10 + digit;
+			    let curr_max = next.entry(curr_state.clone().set(dest, digit))
+				.or_insert(0);
+			    *curr_max = max(*curr_max, n);
+			}
+		    }
+		}
+		Instruction::Binary { op, dest, src } => {
+		    for (curr_state, max_input) in largest_input_for_state.drain() {
+			let updated_state = eval_op(curr_state, op, dest, src)?;
+			let curr_max = next.entry(updated_state).or_insert(0);
+			*curr_max = max(*curr_max, max_input);
+		    }
+		}
+	    }
+	    largest_input_for_state = next;
+	}
+	println!("All steps executed.  There are {} remaining states", largest_input_for_state.len());
+	let largest: Option<i64> = largest_input_for_state.drain()
+	    .filter_map(|(state, n)| if state.z == 0 {
+		Some(n)
+	    } else {
+		None
+	    })
+	    .max();
+	Ok(largest)
+    }
+}
+
 fn part1(program: &[Instruction]) {
-    match solve1(program) {
-        Ok(None) => {
-            println!("Day 24 part 1: did not find a solution");
+    match nfa::execute(program) {
+	Ok(Some(largest)) => {
+            println!("Day 24 part 1: solution is {}", largest);
         }
-        Ok(Some(n)) => {
-            println!("Day 24 part 1: solution is {}", n);
-        }
+	Ok(None) => {
+            println!("Day 24 part 1: there is no maximum");
+	}
         Err(e) => {
             eprintln!("Day 24 part 1: failed: {}", e);
         }
@@ -1078,10 +1168,7 @@ fn run() -> Result<(), String> {
     match parse_input(&ls) {
         Err(e) => Err(e.to_string()),
         Ok(program) => {
-	    let sym = symbolic::symbolic_expression(&program);
-	    let constrained = symbolic::constrain_to_zero(sym);
-	    println!("symbolic form of program is {}", constrained);
-            //part1(&program);
+            part1(&program);
             //part2(&program);
             Ok(())
         }
