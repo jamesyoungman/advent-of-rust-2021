@@ -18,7 +18,7 @@ use tracing_subscriber::prelude::*;
 type Word = i64;
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Hash)]
-enum Reg {
+pub enum Reg {
     W,
     X,
     Y,
@@ -37,7 +37,7 @@ impl Display for Reg {
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum Operand {
+pub enum Operand {
     Register(Reg),
     Literal(Word),
 }
@@ -51,8 +51,8 @@ impl Display for Operand {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum BinaryOpcode {
+#[derive(Debug, Eq, PartialEq, Clone, Copy, PartialOrd, Ord)]
+pub enum BinaryOpcode {
     Add,
     Mul,
     Div,
@@ -106,7 +106,7 @@ impl Display for BinaryOpcode {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Instruction {
+pub enum Instruction {
     Binary {
         op: BinaryOpcode,
         dest: Reg,
@@ -127,7 +127,7 @@ impl Display for Instruction {
 }
 
 #[derive(Debug)]
-struct BadInstruction {
+pub struct BadInstruction {
     input: String,
     message: String,
 }
@@ -220,6 +220,7 @@ fn parse_input(lines: &[&str]) -> Result<Vec<Instruction>, BadInstruction> {
     lines.iter().copied().map(Instruction::try_from).collect()
 }
 
+#[derive(Debug)]
 struct ArithmeticUnit {
     registers: HashMap<Reg, Word>,
 }
@@ -235,19 +236,20 @@ impl Display for BadProgram {
 
 impl Error for BadProgram {}
 
+fn initial_registers() -> HashMap<Reg, Word> {
+    let mut regs = HashMap::new();
+    regs.insert(Reg::W, 0);
+    regs.insert(Reg::X, 0);
+    regs.insert(Reg::Y, 0);
+    regs.insert(Reg::Z, 0);
+    regs
+}
+
 impl ArithmeticUnit {
     fn new() -> ArithmeticUnit {
-        let mut registers: HashMap<Reg, Word> = HashMap::new();
-        ArithmeticUnit::clear_registers(&mut registers);
-        ArithmeticUnit { registers }
-    }
-
-    fn clear_registers(regs: &mut HashMap<Reg, Word>) {
-        regs.clear();
-        regs.insert(Reg::W, 0);
-        regs.insert(Reg::X, 0);
-        regs.insert(Reg::Y, 0);
-        regs.insert(Reg::Z, 0);
+        ArithmeticUnit {
+	    registers: initial_registers(),
+	}
     }
 
     fn set_reg(&mut self, r: &Reg, value: Word) {
@@ -276,7 +278,7 @@ impl ArithmeticUnit {
         program: &[Instruction],
         inputs: &mut Vec<Word>, // reversed: last element is first input, etc.
     ) -> Result<Word, BadProgram> {
-        ArithmeticUnit::clear_registers(&mut self.registers);
+	self.registers = initial_registers();
 
         for instruction in program {
             match instruction {
@@ -444,14 +446,24 @@ fn make_input(val: i64) -> Option<Vec<Word>> {
     }
 }
 
-fn solve1(program: &[Instruction]) -> Result<Option<Word>, BadProgram> {
-    let range = 11_111_111_111_111..111_111_111_111_111;
-    for serial in range.rev() {
-        if serial % 10_000_000 == 0 {
-            println!("checking {:>14}", serial);
-        }
-        match make_input(serial) {
-            None => (),
+
+fn solve_worker<I: Iterator<Item=Word>>(
+    program: &[Instruction],
+    trials: I
+) -> Result<Option<Word>, BadProgram> {
+    let mut nonskipped: u64 = 0;
+    for serial in trials {
+	let verbose = (nonskipped < 10) || (serial % 1_000_000 == 111_111);
+        let inputs = make_input(serial);
+	if verbose {
+	    println!("serial {}: inputs {:?}, unskipped {}", serial, &inputs, nonskipped);
+	}
+	match inputs {
+            None => {
+		if verbose {
+		    println!("Skipping {}", serial);
+		}
+	    }
             Some(inputs) if inputs.len() != 14 => {
                 panic!(
                     "incorrect size input {}; length is {}",
@@ -460,20 +472,334 @@ fn solve1(program: &[Instruction]) -> Result<Option<Word>, BadProgram> {
                 );
             }
             Some(mut inputs) => {
+		nonskipped += 1;
+		if verbose || nonskipped < 10 {
+		    print!(
+			"checking {:>14}: ",
+			serial,
+		    );
+		}
                 let mut alu = ArithmeticUnit::new();
-                match alu.execute(program, &mut inputs) {
-                    Ok(0) => {
-                        return Ok(Some(serial));
-                    }
-                    Ok(_) => (),
+		match alu.execute(program, &mut inputs) {
                     Err(e) => {
                         return Err(e);
                     }
+		    Ok(z) => {
+			if verbose {
+			    println!(
+				"result {}; ALU is {:?}",
+				z,
+				&alu
+			    );
+			}
+			if z == 0 {
+                            return Ok(Some(serial));
+			}
+		    }
                 }
             }
         }
     }
     Ok(None)
+}
+
+fn solve1(program: &[Instruction]) -> Result<Option<Word>, BadProgram> {
+    let range = 11_111_111_111_111..111_111_111_111_111;
+    solve_worker(program, range.rev())
+}
+
+
+mod symbolic {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+    pub enum DeferredOperand {
+	Literal(Word),
+	Input(u8),
+	BinaryOperation{
+	    op: BinaryOpcode,
+	    left: Box<DeferredOperand>,
+	    right: Box<DeferredOperand>,
+	},
+    }
+
+
+    fn simplify_input_equality(input_number: u8, other: DeferredOperand) -> DeferredOperand {
+	match &other {
+	    // No input is zero or greater than 9.
+	    DeferredOperand::Literal(n) if *n == 0 || *n > 9 => DeferredOperand::Literal(0),
+	    _ => DeferredOperand::BinaryOperation {
+		op: BinaryOpcode::Eql,
+		left: Box::new(DeferredOperand::Input(input_number)),
+		right: Box::new(other),
+	    }
+	}
+    }
+
+    fn simplify_add(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
+	match commuting_pair(left, right) {
+	    (x, DeferredOperand::Literal(0)) | (DeferredOperand::Literal(0), x) => x,
+	    (l, r) if l == r => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Mul,
+		    left: Box::new(l),
+		    right: Box::new(DeferredOperand::Literal(2)),
+		}
+	    }
+	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+		DeferredOperand::Literal(a + b)
+	    }
+	    (l, r) => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Add,
+		    left: Box::new(l),
+		    right: Box::new(r),
+		}
+	    }
+	}
+    }
+
+    fn simplify_mul(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
+	match commuting_pair(left, right) {
+	    (_, DeferredOperand::Literal(0)) | (DeferredOperand::Literal(0), _) => DeferredOperand::Literal(0),
+	    (x, DeferredOperand::Literal(1)) | (DeferredOperand::Literal(1), x) => x,
+	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+		DeferredOperand::Literal(a * b)
+	    }
+
+	    // Factorise (a+b)(a+d) to a(b+d).
+	    (
+		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: a, right: b, },
+		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: c, right: d, }
+	    ) if a == c => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Mul,
+		    left: a,
+		    right: Box::new(DeferredOperand::BinaryOperation {
+			op: BinaryOpcode::Add,
+			left: b,
+			right: d,
+		    }),
+		}
+	    }
+
+	    // Factorise (a+b)(c+b) to b(a+c).
+	    (
+		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: a, right: b, },
+		DeferredOperand::BinaryOperation { op: BinaryOpcode::Add, left: c, right: d, }
+	    ) if b == d => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Mul,
+		    left: b,
+		    right: Box::new(DeferredOperand::BinaryOperation {
+			op: BinaryOpcode::Add,
+			left: a,
+			right: c,
+		    }),
+		}
+	    }
+
+	    (l, r) => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Mul,
+		    left: Box::new(l),
+		    right: Box::new(r),
+		}
+	    }
+	}
+    }
+
+    fn simplify_div(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
+	match (left, right) {
+	    (x, DeferredOperand::Literal(1)) | (DeferredOperand::Literal(1), x) => x,
+	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+		DeferredOperand::Literal(a / b)
+	    }
+	    (l, r) => {
+		if l == r {
+		    DeferredOperand::Literal(1)
+		} else {
+		    DeferredOperand::BinaryOperation {
+			op: BinaryOpcode::Div,
+			left: Box::new(l),
+			right: Box::new(r),
+		    }
+		}
+	    }
+	}
+    }
+
+    fn simplify_mod(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
+	match (left, right) {
+	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+		DeferredOperand::Literal(a % b)
+	    }
+	    (l, r) if l == r => {
+		DeferredOperand::Literal(0)
+	    }
+	    (l, r) => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Mod,
+		    left: Box::new(l),
+		    right: Box::new(r),
+		}
+	    }
+	}
+    }
+
+    /// Swap the operands of a commutative operation such that one kind of
+    /// argument reproducibly goes on the left.  This should allow other
+    /// rules to notice that two expressions are structurally identical.
+    ///
+    /// This is based on the idea that for any commutative operation @, (a
+    /// @ b) = (b @ a) for any a, b.
+    fn commuting_pair(left: DeferredOperand, right: DeferredOperand) -> (DeferredOperand, DeferredOperand) {
+	if left < right {
+	    (left, right)
+	} else {
+	    (right, left)
+	}
+    }
+
+    /// Simplify (a @ b) = (c @ d)
+    fn simplify_commutative_equality(
+	the_op: BinaryOpcode,
+	a: DeferredOperand,
+	b: DeferredOperand,
+	c: DeferredOperand,
+	d: DeferredOperand,
+    ) -> DeferredOperand {
+	assert!(the_op == BinaryOpcode::Add || the_op == BinaryOpcode::Mul);
+
+	if a == c {
+	    simplify_eql(b, d)
+	} else if a == d {
+	    simplify_eql(b, c)
+	} else if b == c {
+	    simplify_eql(a, d)
+	} else if b == d {
+	    simplify_eql(a, c)
+	} else {
+	    DeferredOperand::BinaryOperation {
+		op: BinaryOpcode::Eql,
+		left: Box::new(DeferredOperand::BinaryOperation {
+		    op: the_op,
+		    left: Box::new(a),
+		    right: Box::new(b),
+		}),
+		right: Box::new(DeferredOperand::BinaryOperation {
+		    op: the_op,
+		    left: Box::new(c),
+		    right: Box::new(d),
+		}),
+	    }
+	}
+    }
+
+    fn simplify_eql(left: DeferredOperand, right: DeferredOperand) -> DeferredOperand {
+	match commuting_pair(left, right) {
+	    (DeferredOperand::Literal(a), DeferredOperand::Literal(b)) => {
+		if a == b {
+		    DeferredOperand::Literal(1)
+		} else {
+		    DeferredOperand::Literal(0)
+		}
+	    }
+	    (DeferredOperand::Input(a), DeferredOperand::Input(b)) if a == b => {
+		DeferredOperand::Literal(1)
+	    }
+	    (DeferredOperand::Input(inp), other)  | (other, DeferredOperand::Input(inp))  => {
+		simplify_input_equality(inp, other)
+	    }
+
+	    (l, r) if l == r => DeferredOperand::Literal(1),
+
+	    // simplify (a @ b) = (c @ d) for any commutative operation @.
+	    (
+		// left is a @ b
+		DeferredOperand::BinaryOperation {
+		    op: left_op,
+		    left: a,
+		    right: b,
+		},
+		// right is c @ d.
+		DeferredOperand::BinaryOperation {
+		    op: right_op,
+		    left: c,
+		    right: d,
+		},
+	    ) if left_op == right_op => {
+		simplify_commutative_equality(left_op, *a, *b, *c, *d)
+	    }
+
+	    (l, r) => {
+		DeferredOperand::BinaryOperation {
+		    op: BinaryOpcode::Eql,
+		    left: Box::new(l),
+		    right: Box::new(r),
+		}
+	    }
+	}
+    }
+
+
+    fn simplify(input: DeferredOperand) -> DeferredOperand {
+	match input {
+	    DeferredOperand::Literal(_) | DeferredOperand::Input(_) => input,
+	    DeferredOperand::BinaryOperation{ op, left, right } => {
+		match (op, *left, *right) {
+		    (BinaryOpcode::Add, l, r) => simplify_add(l, r),
+		    (BinaryOpcode::Mul, l, r) => simplify_mul(l, r),
+		    (BinaryOpcode::Div, l, r) => simplify_div(l, r),
+		    (BinaryOpcode::Mod, l, r) => simplify_mod(l, r),
+		    (BinaryOpcode::Eql, l, r) => simplify_eql(l, r),
+		}
+	    }
+	}
+    }
+
+
+    pub fn symbolic_expression(program: &[Instruction]) -> DeferredOperand {
+	let mut registers: HashMap<Reg, DeferredOperand> = {
+	    let mut regs = HashMap::new();
+	    for r in [Reg::W, Reg::X, Reg::Y, Reg::Z] {
+		regs.insert(r, DeferredOperand::Literal(0));
+	    }
+	    regs
+	};
+	let mut inputs_consumed: u8 = 0;
+	for (i, instruction) in program.iter().enumerate() {
+	    println!("symbolic_expression: {:>03}: including {}", i, &instruction);
+	    match instruction {
+		Instruction::Inp{dest} => {
+		    registers.insert(*dest, DeferredOperand::Input(inputs_consumed));
+		    inputs_consumed += 1;
+		}
+		Instruction::Binary{op, dest, src} => {
+		    let right: Box<DeferredOperand> = match src {
+			Operand::Register(src) => match registers.get(src) {
+			    Some(val) => Box::new(val.clone()),
+			    None => {
+				panic!("unknown source register {}", src);
+			    }
+			}
+			Operand::Literal(n) => Box::new(DeferredOperand::Literal(*n)),
+		    };
+		    if let Some(lop) = registers.remove(dest) {
+			let left: Box<DeferredOperand> = Box::new(lop);
+			registers.insert(*dest, simplify(DeferredOperand::BinaryOperation {
+			    op: *op,
+			    left,
+			    right,
+			}));
+		    } else {
+			panic!("unknown destination register {}", dest);
+		    }
+		}
+	    }
+	}
+	registers.get(&Reg::Z).unwrap().clone()
+    }
 }
 
 fn part1(program: &[Instruction]) {
@@ -517,8 +843,10 @@ fn run() -> Result<(), String> {
     match parse_input(&ls) {
         Err(e) => Err(e.to_string()),
         Ok(program) => {
-            part1(&program);
-            part2(&program);
+	    let sym = symbolic::symbolic_expression(&program);
+	    println!("symbolic form of program is {:#?}", sym);
+            //part1(&program);
+            //part2(&program);
             Ok(())
         }
     }
