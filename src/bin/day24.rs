@@ -1,4 +1,4 @@
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -240,6 +240,131 @@ impl Error for BadProgram {}
 mod nfa {
     use super::*;
 
+    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
+    struct MaxMinDigit {
+	bounds: Option<(i8, i8)>
+    }
+
+    impl MaxMinDigit {
+	fn update(&mut self, digit: i8) {
+	    match self.bounds {
+		None => {
+		    self.bounds = Some((digit, digit));
+		}
+		Some((mindigit, maxdigit)) => {
+		    self.bounds = Some((min(mindigit, digit),
+					max(maxdigit, digit)))
+		}
+	    }
+	}
+
+	fn as_digit(d: Option<i8>) -> char {
+	    match d {
+		Some(n) => std::char::from_digit(n as u32, 10).unwrap(),
+		None => '?',
+	    }
+	}
+
+	fn max_digit(&self) -> char {
+	    Self::as_digit(self.bounds.map(|b| b.1))
+	}
+
+	fn min_digit(&self) -> char {
+	    Self::as_digit(self.bounds.map(|b| b.0))
+	}
+    }
+
+    impl Default for MaxMinDigit {
+	fn default() -> Self {
+	    Self {
+		bounds: None,
+	    }
+	}
+    }
+
+    #[test]
+    fn test_max_min_digit() {
+	let mut m = MaxMinDigit::default();
+	assert_eq!(m.max_digit(), '?');
+	assert_eq!(m.min_digit(), '?');
+	m.update(2);
+	assert_eq!(m.max_digit(), '2');
+	assert_eq!(m.min_digit(), '2');
+	m.update(3);
+	assert_eq!(m.max_digit(), '3');
+	assert_eq!(m.min_digit(), '2');
+    }
+
+
+    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone)]
+    struct ModelNumberBounds {
+	digits: [MaxMinDigit; 14],
+    }
+
+    impl ModelNumberBounds {
+	fn update(&mut self, pos: usize, digit: i8) {
+	    self.digits[pos].update(digit);
+	}
+
+	fn max_to_string(&self) -> String {
+	    self.digits.iter().map(MaxMinDigit::max_digit).collect()
+	}
+
+	fn min_to_string(&self) -> String {
+	    self.digits.iter().map(MaxMinDigit::min_digit).collect()
+	}
+
+	fn maybe_update_from(&mut self, other: &ModelNumberBounds) {
+	    for pos in 0..14 {
+		if let Some((lower, upper)) = other.digits[pos].bounds {
+		    self.digits[pos].update(lower);
+		    self.digits[pos].update(upper);
+		}
+	    }
+	}
+    }
+
+    impl Default for ModelNumberBounds {
+	fn default() -> ModelNumberBounds {
+	    ModelNumberBounds {
+		digits: [MaxMinDigit::default(); 14],
+	    }
+	}
+    }
+
+    #[test]
+    fn test_model_number_bounds() {
+	let mut b = ModelNumberBounds::default();
+	assert_eq!(b.min_to_string(), "??????????????");
+	assert_eq!(b.max_to_string(), "??????????????");
+	assert_eq!(b.max_to_string().len(), 14);
+	b.update(0, 4);
+	assert_eq!(b.min_to_string(), "4?????????????");
+	assert_eq!(b.max_to_string(), "4?????????????");
+	b.update(0, 7);
+	assert_eq!(b.min_to_string(), "4?????????????");
+	assert_eq!(b.max_to_string(), "7?????????????");
+	b.update(0, 2);
+	assert_eq!(b.min_to_string(), "2?????????????");
+	assert_eq!(b.max_to_string(), "7?????????????");
+	b.update(1, 6);
+	assert_eq!(b.min_to_string(), "26????????????");
+	assert_eq!(b.max_to_string(), "76????????????");
+	b.update(2, 1);
+	assert_eq!(b.min_to_string(), "261???????????");
+	assert_eq!(b.max_to_string(), "761???????????");
+
+	let mut other = ModelNumberBounds::default();
+	other.update(0, 8);
+	other.update(1, 7);
+	other.update(2, 3);
+	assert_eq!(other.min_to_string(), "873???????????");
+
+	b.maybe_update_from(&other);
+	assert_eq!(b.min_to_string(), "261???????????");
+	assert_eq!(b.max_to_string(), "873???????????");
+    }
+
     #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone)]
     struct State {
         w: Word,
@@ -283,79 +408,89 @@ mod nfa {
         Ok(state.set(dest, result))
     }
 
-    pub fn execute(program: &[Instruction]) -> Result<Option<i64>, BadProgram> {
-        const DIGITS: [i64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    pub fn execute(program: &[Instruction]) -> Result<(String, String), BadProgram> {
+        const DIGITS: [i8; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
         let mut inputs_consumed: usize = 0;
-        let mut largest_input_for_state: HashMap<State, i64> = HashMap::with_capacity(590490);
-        largest_input_for_state.insert(
+        let mut input_for_state: HashMap<State, ModelNumberBounds> = HashMap::with_capacity(590490);
+        input_for_state.insert(
             State {
                 w: 0,
                 x: 0,
                 y: 0,
                 z: 0,
             },
-            0,
+            ModelNumberBounds::default(),
         );
+
         for (i, instruction) in program.iter().enumerate() {
             println!(
                 "Step {:>3} (consumed {:>2} inputs, tracking {:>9} states): {}",
                 i,
                 inputs_consumed,
-                largest_input_for_state.len(),
+                input_for_state.len(),
                 &instruction,
             );
 
             match instruction {
                 Instruction::Inp { dest } => {
-                    inputs_consumed += 1;
-		    let mut next: HashMap<State, i64> = HashMap::with_capacity(largest_input_for_state.capacity());
-                    for (curr_state, max_input) in largest_input_for_state.drain() {
+		    let mut next: HashMap<State, ModelNumberBounds> = HashMap::with_capacity(input_for_state.capacity());
+                    for (curr_state, bounds) in input_for_state.drain() {
                         for digit in DIGITS {
-                            let n = max_input * 10 + digit;
-                            let curr_max =
-                                next.entry(curr_state.clone().set(dest, digit)).or_insert(0);
-                            *curr_max = max(*curr_max, n);
+                            let curr_bounds = next.entry(curr_state.clone().set(dest, digit.into())).or_default();
+			    curr_bounds.maybe_update_from(&bounds);
+			    curr_bounds.update(inputs_consumed, digit);
                         }
                     }
-		    largest_input_for_state = next;
+                    inputs_consumed += 1;
+		    input_for_state = next;
                 }
+
                 Instruction::Binary { op, dest, src } => {
-		    let mut next: HashMap<State, i64> = HashMap::with_capacity(largest_input_for_state.capacity());
-                    for (curr_state, max_input) in largest_input_for_state.drain() {
+		    let mut next: HashMap<State, ModelNumberBounds> = HashMap::with_capacity(input_for_state.capacity());
+                    for (curr_state, bounds) in input_for_state.drain() {
                         let updated_state = eval_op(curr_state, op, dest, src)?;
-			if let Some(curr_max) = next.get_mut(&updated_state) {
-                            *curr_max = max(*curr_max, max_input);
-			} else {
-			    next.insert(updated_state, max_input);
-			}
+			let curr_bounds = next.entry(updated_state).or_default();
+			curr_bounds.maybe_update_from(&bounds);
                     }
-		    largest_input_for_state = next;
+		    input_for_state = next;
                 }
             }
         }
         println!(
             "All steps executed.  There are {} remaining states",
-            largest_input_for_state.len()
+            input_for_state.len()
         );
-        let largest: Option<i64> = largest_input_for_state
-            .drain()
-            .filter_map(|(state, n)| if state.z == 0 { Some(n) } else { None })
-            .max();
-        Ok(largest)
+
+	fn only_zero<T: Clone>(t: (&State, &T)) -> Option<T> {
+	    let (state, n) = t;
+	    if state.z == 0 { Some(n.clone()) } else { None }
+	}
+
+        let result: ModelNumberBounds = input_for_state
+            .iter()
+	    .filter_map(only_zero)
+	    .fold(ModelNumberBounds::default(),
+		  |acc, curr| {
+		      let mut updated = ModelNumberBounds::default();
+		      updated.maybe_update_from(&acc);
+		      updated.maybe_update_from(&curr);
+		      updated
+		  });
+	let smallest: String = result.min_to_string();
+	let greatest: String = result.max_to_string();
+	Ok((smallest, greatest))
     }
 }
 
-fn part1(program: &[Instruction]) {
+fn parts_1_and_2(program: &[Instruction]) {
     match nfa::execute(program) {
-        Ok(Some(largest)) => {
-            println!("Day 24 part 1: solution is {}", largest);
-        }
-        Ok(None) => {
-            println!("Day 24 part 1: there is no maximum");
-        }
-        Err(e) => {
-            eprintln!("Day 24 part 1: failed: {}", e);
-        }
+	Err(e) => {
+            eprintln!("Day 24: failed: {}", e);
+	}
+	Ok((smallest, largest)) => {
+	    println!("Day 24 part 1: solution is {}", largest);
+	    println!("Day 24 part 2: solution is {}", smallest);
+	}
     }
 }
 
@@ -384,8 +519,7 @@ fn run() -> Result<(), String> {
     match parse_input(&ls) {
         Err(e) => Err(e.to_string()),
         Ok(program) => {
-            part1(&program);
-            //part2(&program);
+            parts_1_and_2(&program);
             Ok(())
         }
     }
