@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::io;
 use std::io::prelude::*;
 use std::ops::Range;
@@ -11,6 +12,8 @@ use nom::{
     IResult,
 };
 use tracing_subscriber::prelude::*;
+
+type Pair = (i32, i32);
 
 #[derive(Debug, Eq, PartialEq)]
 struct Target {
@@ -31,18 +34,18 @@ fn i32_parser(input: &str) -> IResult<&str, i32> {
     )(input)
 }
 
-fn parse_range(input: &str) -> IResult<&str, (i32, i32)> {
+fn parse_range(input: &str) -> IResult<&str, Pair> {
     tuple((i32_parser, preceded(tag(".."), i32_parser)))(input)
 }
 
-fn parse_target(input: &str) -> IResult<&str, ((i32, i32), (i32, i32))> {
+fn parse_target(input: &str) -> IResult<&str, (Pair, Pair)> {
     preceded(
         tag("target area: x="),
         tuple((parse_range, preceded(tag(", y="), parse_range))),
     )(input)
 }
 
-fn maybe_swap(lesser: i32, greater: i32) -> (i32, i32) {
+fn maybe_swap(lesser: i32, greater: i32) -> Pair {
     if lesser <= greater {
         (lesser, greater)
     } else {
@@ -82,18 +85,18 @@ fn test_parse_target() {
     );
 }
 
-fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<(i32, i32)> {
+fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<Pair> {
     let mut result = Vec::new();
     let mut x = 0;
     let mut y = 0;
     for _iter in 0.. {
         x += xv;
         y += yv;
-        if xv > 0 {
-            xv -= 1;
-        } else if xv < 0 {
-            xv += 1;
-        }
+	match xv.cmp(&0) {
+	    Ordering::Greater => { xv -= 1; }
+	    Ordering::Equal => (),
+	    Ordering::Less => { xv += 1; }
+	}
         yv -= 1;
         result.push((x, y));
         if y < target.y.start {
@@ -105,10 +108,8 @@ fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<(i32,
 
 fn sim(name: &str, xv: i32, yv: i32, target: &Target) -> (bool, i32) {
     let points = simulate(name, xv, yv, target);
-    let hit = points
-        .iter()
-        .find(|(x, y)| target.contains(*x, *y))
-        .is_some();
+    let hit = points.iter()
+        .any(|(x, y)| target.contains(*x, *y));
     let high = points.iter().map(|(_x, y)| y).max().unwrap();
     (hit, *high)
 }
@@ -203,7 +204,7 @@ fn main() {
             panic!("failed to read input: {}", e);
         }
     }
-    let no_newline: &str = input.strip_suffix("\n").unwrap_or(input.as_str());
+    let no_newline: &str = input.strip_suffix('\n').unwrap_or_else(|| input.as_str());
     match Target::try_from(no_newline) {
         Ok(t) => {
             part1(&t);
