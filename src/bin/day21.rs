@@ -146,7 +146,7 @@ mod part2 {
         if in_rolls == 0 || total_roll < 1 {
             0
         } else if in_rolls == 1 {
-	    if (1..4).contains(&total_roll) {
+            if (1..4).contains(&total_roll) {
                 1
             } else {
                 0

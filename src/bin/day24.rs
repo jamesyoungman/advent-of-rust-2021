@@ -242,127 +242,123 @@ mod nfa {
 
     #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
     struct MaxMinDigit {
-	bounds: Option<(i8, i8)>
+        bounds: Option<(i8, i8)>,
     }
 
     impl MaxMinDigit {
-	fn update(&mut self, digit: i8) {
-	    match self.bounds {
-		None => {
-		    self.bounds = Some((digit, digit));
-		}
-		Some((mindigit, maxdigit)) => {
-		    self.bounds = Some((min(mindigit, digit),
-					max(maxdigit, digit)))
-		}
-	    }
-	}
+        fn update(&mut self, digit: i8) {
+            match self.bounds {
+                None => {
+                    self.bounds = Some((digit, digit));
+                }
+                Some((mindigit, maxdigit)) => {
+                    self.bounds = Some((min(mindigit, digit), max(maxdigit, digit)))
+                }
+            }
+        }
 
-	fn as_digit(d: Option<i8>) -> char {
-	    match d {
-		Some(n) => std::char::from_digit(n as u32, 10).unwrap(),
-		None => '?',
-	    }
-	}
+        fn as_digit(d: Option<i8>) -> char {
+            match d {
+                Some(n) => std::char::from_digit(n as u32, 10).unwrap(),
+                None => '?',
+            }
+        }
 
-	fn max_digit(&self) -> char {
-	    Self::as_digit(self.bounds.map(|b| b.1))
-	}
+        fn max_digit(&self) -> char {
+            Self::as_digit(self.bounds.map(|b| b.1))
+        }
 
-	fn min_digit(&self) -> char {
-	    Self::as_digit(self.bounds.map(|b| b.0))
-	}
+        fn min_digit(&self) -> char {
+            Self::as_digit(self.bounds.map(|b| b.0))
+        }
     }
 
     impl Default for MaxMinDigit {
-	fn default() -> Self {
-	    Self {
-		bounds: None,
-	    }
-	}
+        fn default() -> Self {
+            Self { bounds: None }
+        }
     }
 
     #[test]
     fn test_max_min_digit() {
-	let mut m = MaxMinDigit::default();
-	assert_eq!(m.max_digit(), '?');
-	assert_eq!(m.min_digit(), '?');
-	m.update(2);
-	assert_eq!(m.max_digit(), '2');
-	assert_eq!(m.min_digit(), '2');
-	m.update(3);
-	assert_eq!(m.max_digit(), '3');
-	assert_eq!(m.min_digit(), '2');
+        let mut m = MaxMinDigit::default();
+        assert_eq!(m.max_digit(), '?');
+        assert_eq!(m.min_digit(), '?');
+        m.update(2);
+        assert_eq!(m.max_digit(), '2');
+        assert_eq!(m.min_digit(), '2');
+        m.update(3);
+        assert_eq!(m.max_digit(), '3');
+        assert_eq!(m.min_digit(), '2');
     }
-
 
     #[derive(PartialOrd, Ord, PartialEq, Eq, Clone)]
     struct ModelNumberBounds {
-	digits: [MaxMinDigit; 14],
+        digits: [MaxMinDigit; 14],
     }
 
     impl ModelNumberBounds {
-	fn update(&mut self, pos: usize, digit: i8) {
-	    self.digits[pos].update(digit);
-	}
+        fn update(&mut self, pos: usize, digit: i8) {
+            self.digits[pos].update(digit);
+        }
 
-	fn max_to_string(&self) -> String {
-	    self.digits.iter().map(MaxMinDigit::max_digit).collect()
-	}
+        fn max_to_string(&self) -> String {
+            self.digits.iter().map(MaxMinDigit::max_digit).collect()
+        }
 
-	fn min_to_string(&self) -> String {
-	    self.digits.iter().map(MaxMinDigit::min_digit).collect()
-	}
+        fn min_to_string(&self) -> String {
+            self.digits.iter().map(MaxMinDigit::min_digit).collect()
+        }
 
-	fn maybe_update_from(&mut self, other: &ModelNumberBounds) {
-	    for pos in 0..14 {
-		if let Some((lower, upper)) = other.digits[pos].bounds {
-		    self.digits[pos].update(lower);
-		    self.digits[pos].update(upper);
-		}
-	    }
-	}
+        fn maybe_update_from(&mut self, other: &ModelNumberBounds) {
+            for pos in 0..14 {
+                if let Some((lower, upper)) = other.digits[pos].bounds {
+                    self.digits[pos].update(lower);
+                    self.digits[pos].update(upper);
+                }
+            }
+        }
     }
 
     impl Default for ModelNumberBounds {
-	fn default() -> ModelNumberBounds {
-	    ModelNumberBounds {
-		digits: [MaxMinDigit::default(); 14],
-	    }
-	}
+        fn default() -> ModelNumberBounds {
+            ModelNumberBounds {
+                digits: [MaxMinDigit::default(); 14],
+            }
+        }
     }
 
     #[test]
     fn test_model_number_bounds() {
-	let mut b = ModelNumberBounds::default();
-	assert_eq!(b.min_to_string(), "??????????????");
-	assert_eq!(b.max_to_string(), "??????????????");
-	assert_eq!(b.max_to_string().len(), 14);
-	b.update(0, 4);
-	assert_eq!(b.min_to_string(), "4?????????????");
-	assert_eq!(b.max_to_string(), "4?????????????");
-	b.update(0, 7);
-	assert_eq!(b.min_to_string(), "4?????????????");
-	assert_eq!(b.max_to_string(), "7?????????????");
-	b.update(0, 2);
-	assert_eq!(b.min_to_string(), "2?????????????");
-	assert_eq!(b.max_to_string(), "7?????????????");
-	b.update(1, 6);
-	assert_eq!(b.min_to_string(), "26????????????");
-	assert_eq!(b.max_to_string(), "76????????????");
-	b.update(2, 1);
-	assert_eq!(b.min_to_string(), "261???????????");
-	assert_eq!(b.max_to_string(), "761???????????");
+        let mut b = ModelNumberBounds::default();
+        assert_eq!(b.min_to_string(), "??????????????");
+        assert_eq!(b.max_to_string(), "??????????????");
+        assert_eq!(b.max_to_string().len(), 14);
+        b.update(0, 4);
+        assert_eq!(b.min_to_string(), "4?????????????");
+        assert_eq!(b.max_to_string(), "4?????????????");
+        b.update(0, 7);
+        assert_eq!(b.min_to_string(), "4?????????????");
+        assert_eq!(b.max_to_string(), "7?????????????");
+        b.update(0, 2);
+        assert_eq!(b.min_to_string(), "2?????????????");
+        assert_eq!(b.max_to_string(), "7?????????????");
+        b.update(1, 6);
+        assert_eq!(b.min_to_string(), "26????????????");
+        assert_eq!(b.max_to_string(), "76????????????");
+        b.update(2, 1);
+        assert_eq!(b.min_to_string(), "261???????????");
+        assert_eq!(b.max_to_string(), "761???????????");
 
-	let mut other = ModelNumberBounds::default();
-	other.update(0, 8);
-	other.update(1, 7);
-	other.update(2, 3);
-	assert_eq!(other.min_to_string(), "873???????????");
+        let mut other = ModelNumberBounds::default();
+        other.update(0, 8);
+        other.update(1, 7);
+        other.update(2, 3);
+        assert_eq!(other.min_to_string(), "873???????????");
 
-	b.maybe_update_from(&other);
-	assert_eq!(b.min_to_string(), "261???????????");
-	assert_eq!(b.max_to_string(), "873???????????");
+        b.maybe_update_from(&other);
+        assert_eq!(b.min_to_string(), "261???????????");
+        assert_eq!(b.max_to_string(), "873???????????");
     }
 
     #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone)]
@@ -433,26 +429,30 @@ mod nfa {
 
             match instruction {
                 Instruction::Inp { dest } => {
-		    let mut next: HashMap<State, ModelNumberBounds> = HashMap::with_capacity(input_for_state.capacity());
+                    let mut next: HashMap<State, ModelNumberBounds> =
+                        HashMap::with_capacity(input_for_state.capacity());
                     for (curr_state, bounds) in input_for_state.drain() {
                         for digit in DIGITS {
-                            let curr_bounds = next.entry(curr_state.clone().set(dest, digit.into())).or_default();
-			    curr_bounds.maybe_update_from(&bounds);
-			    curr_bounds.update(inputs_consumed, digit);
+                            let curr_bounds = next
+                                .entry(curr_state.clone().set(dest, digit.into()))
+                                .or_default();
+                            curr_bounds.maybe_update_from(&bounds);
+                            curr_bounds.update(inputs_consumed, digit);
                         }
                     }
                     inputs_consumed += 1;
-		    input_for_state = next;
+                    input_for_state = next;
                 }
 
                 Instruction::Binary { op, dest, src } => {
-		    let mut next: HashMap<State, ModelNumberBounds> = HashMap::with_capacity(input_for_state.capacity());
+                    let mut next: HashMap<State, ModelNumberBounds> =
+                        HashMap::with_capacity(input_for_state.capacity());
                     for (curr_state, bounds) in input_for_state.drain() {
                         let updated_state = eval_op(curr_state, op, dest, src)?;
-			let curr_bounds = next.entry(updated_state).or_default();
-			curr_bounds.maybe_update_from(&bounds);
+                        let curr_bounds = next.entry(updated_state).or_default();
+                        curr_bounds.maybe_update_from(&bounds);
                     }
-		    input_for_state = next;
+                    input_for_state = next;
                 }
             }
         }
@@ -461,36 +461,39 @@ mod nfa {
             input_for_state.len()
         );
 
-	fn only_zero<T: Clone>(t: (&State, &T)) -> Option<T> {
-	    let (state, n) = t;
-	    if state.z == 0 { Some(n.clone()) } else { None }
-	}
+        fn only_zero<T: Clone>(t: (&State, &T)) -> Option<T> {
+            let (state, n) = t;
+            if state.z == 0 {
+                Some(n.clone())
+            } else {
+                None
+            }
+        }
 
-        let result: ModelNumberBounds = input_for_state
-            .iter()
-	    .filter_map(only_zero)
-	    .fold(ModelNumberBounds::default(),
-		  |acc, curr| {
-		      let mut updated = ModelNumberBounds::default();
-		      updated.maybe_update_from(&acc);
-		      updated.maybe_update_from(&curr);
-		      updated
-		  });
-	let smallest: String = result.min_to_string();
-	let greatest: String = result.max_to_string();
-	Ok((smallest, greatest))
+        let result: ModelNumberBounds = input_for_state.iter().filter_map(only_zero).fold(
+            ModelNumberBounds::default(),
+            |acc, curr| {
+                let mut updated = ModelNumberBounds::default();
+                updated.maybe_update_from(&acc);
+                updated.maybe_update_from(&curr);
+                updated
+            },
+        );
+        let smallest: String = result.min_to_string();
+        let greatest: String = result.max_to_string();
+        Ok((smallest, greatest))
     }
 }
 
 fn parts_1_and_2(program: &[Instruction]) {
     match nfa::execute(program) {
-	Err(e) => {
+        Err(e) => {
             eprintln!("Day 24: failed: {}", e);
-	}
-	Ok((smallest, largest)) => {
-	    println!("Day 24 part 1: solution is {}", largest);
-	    println!("Day 24 part 2: solution is {}", smallest);
-	}
+        }
+        Ok((smallest, largest)) => {
+            println!("Day 24 part 1: solution is {}", largest);
+            println!("Day 24 part 2: solution is {}", smallest);
+        }
     }
 }
 
