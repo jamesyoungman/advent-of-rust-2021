@@ -286,7 +286,7 @@ mod nfa {
     pub fn execute(program: &[Instruction]) -> Result<Option<i64>, BadProgram> {
         const DIGITS: [i64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
         let mut inputs_consumed: usize = 0;
-        let mut largest_input_for_state: HashMap<State, i64> = HashMap::new();
+        let mut largest_input_for_state: HashMap<State, i64> = HashMap::with_capacity(590490);
         largest_input_for_state.insert(
             State {
                 w: 0,
@@ -305,10 +305,10 @@ mod nfa {
                 &instruction,
             );
 
-            let mut next: HashMap<State, i64> = HashMap::new();
             match instruction {
                 Instruction::Inp { dest } => {
                     inputs_consumed += 1;
+		    let mut next: HashMap<State, i64> = HashMap::with_capacity(largest_input_for_state.capacity());
                     for (curr_state, max_input) in largest_input_for_state.drain() {
                         for digit in DIGITS {
                             let n = max_input * 10 + digit;
@@ -317,16 +317,18 @@ mod nfa {
                             *curr_max = max(*curr_max, n);
                         }
                     }
+		    largest_input_for_state = next;
                 }
                 Instruction::Binary { op, dest, src } => {
+		    let mut next: HashMap<State, i64> = HashMap::with_capacity(largest_input_for_state.capacity());
                     for (curr_state, max_input) in largest_input_for_state.drain() {
                         let updated_state = eval_op(curr_state, op, dest, src)?;
                         let curr_max = next.entry(updated_state).or_insert(0);
                         *curr_max = max(*curr_max, max_input);
                     }
+		    largest_input_for_state = next;
                 }
             }
-            largest_input_for_state = next;
         }
         println!(
             "All steps executed.  There are {} remaining states",
