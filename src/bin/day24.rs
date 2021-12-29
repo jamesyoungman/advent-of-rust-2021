@@ -323,8 +323,11 @@ mod nfa {
 		    let mut next: HashMap<State, i64> = HashMap::with_capacity(largest_input_for_state.capacity());
                     for (curr_state, max_input) in largest_input_for_state.drain() {
                         let updated_state = eval_op(curr_state, op, dest, src)?;
-                        let curr_max = next.entry(updated_state).or_insert(0);
-                        *curr_max = max(*curr_max, max_input);
+			if let Some(curr_max) = next.get_mut(&updated_state) {
+                            *curr_max = max(*curr_max, max_input);
+			} else {
+			    next.insert(updated_state, max_input);
+			}
                     }
 		    largest_input_for_state = next;
                 }
