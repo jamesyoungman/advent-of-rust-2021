@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 use std::cmp::{max, min};
 use std::fmt::{self, Debug, Display, Formatter};
+use std::io::{self, Read};
 use std::ops::{Add, AddAssign, Mul};
 
 use pathfinding::directed::astar::astar;
@@ -124,32 +125,6 @@ impl Position {
 	let dx: u8 = max(self.x, other.x) - min(self.x, other.x);
 	let dy: u8 = max(self.y, other.y) - min(self.y, other.y);
 	dx + dy == 1
-    }
-
-    fn north(&self, dist: u8) -> Option<Position> {
-	if self.y >= dist {
-	    Some(Position {
-		x: self.x,
-		y: self.y - dist,
-	    })
-	} else {
-	    None
-	}
-    }
-
-    fn south(&self, dist: u8) -> Option<Position> {
-	let y = self.y + dist;
-	if y <= 2 {
-	    match self.x {
-		2|4|6|8 => Some(Position {
-		    x: self.x,
-		    y,
-		}),
-		_ => None,
-	    }
-	} else {
-	    None
-	}
     }
 
     fn doormat_of(who: &Amphipod) -> Position {
@@ -343,7 +318,7 @@ impl State {
 	if from == to {
 	    panic!("with_moved_amphipod: it did not actually move");
 	}
-	if let Some(existing) = self.location_contents.get(&to) {
+	if let Some(existing) = self.location_contents.get(to) {
 	    panic!(
 		"with_moved_amphipod: destination {:?} already contains {:?}",
 		to,
@@ -373,10 +348,11 @@ impl State {
     fn path_to_exit_doormat(&self, current: &Position) -> Path {
 	assert!(matches!(current.y, 1|2));     // must be in a room.
 	assert!(matches!(current.x, 2|4|6|8)); // must be in a room.
-	let north = current.north(1).unwrap();
 	let path = match current.y {
-	    2 => Path::from_steps(vec![north, current.north(2).unwrap()]),
-	    1 => Path::from_step(north),
+	    2 => Path::from_steps(vec![Position { x: current.x, y: 1 },
+				       Position { x: current.x, y: 0 },
+	    ]),
+	    1 => Path::from_steps(vec![Position { x: current.x, y: 0 }]),
 	    _ => unreachable!(),
 	}.checked(current).expect("path_to_exit_doormat should produce valid paths");
 	if let Some(last) = path.last() {
@@ -442,18 +418,6 @@ impl State {
 	result
     }
 
-    fn is_goal(&self) -> bool {
-	true &&
-	    self.location_contents.get(&Position{x: 2, y: 1}) == Some(&Amphipod::A) &&
-	    self.location_contents.get(&Position{x: 2, y: 2}) == Some(&Amphipod::A) &&
-	    self.location_contents.get(&Position{x: 4, y: 1}) == Some(&Amphipod::B) &&
-	    self.location_contents.get(&Position{x: 4, y: 2}) == Some(&Amphipod::B) &&
-	    self.location_contents.get(&Position{x: 6, y: 1}) == Some(&Amphipod::C) &&
-	    self.location_contents.get(&Position{x: 6, y: 2}) == Some(&Amphipod::C) &&
-	    self.location_contents.get(&Position{x: 8, y: 1}) == Some(&Amphipod::D) &&
-	    self.location_contents.get(&Position{x: 8, y: 2}) == Some(&Amphipod::D)
-    }
-
     fn heuristic(&self) -> Cost {
 	let mut total_h: Cost = Cost(0);
 	for (pos, who) in self.location_contents.iter() {
@@ -463,7 +427,7 @@ impl State {
 		    0
 		}
 		_ => {
-		    let doormat = Position::doormat_of(&who);
+		    let doormat = Position::doormat_of(who);
 		    // manhattan distiance is an underestimate when
 		    // the amphipod is in another family's room.  This
 		    // does not violate the requirements on the
@@ -474,7 +438,7 @@ impl State {
 		    // amphipods have to move to the bottom of their
 		    // room, this is another respect in which this
 		    // heuristic is an underestimate.
-		    Position::manhattan(&pos, &doormat) + 1
+		    Position::manhattan(pos, &doormat) + 1
 		}
 	    };
 	    total_h += who.move_cost() * moves;
@@ -486,10 +450,10 @@ impl State {
 	let mut result = Vec::new();
 	for (pos, who) in self.location_contents.iter() {
 	    let unit_cost: Cost = who.move_cost();
-	    let paths = self.unblocked_moves_for(&pos);
+	    let paths = self.unblocked_moves_for(pos);
 	    for path in paths {
 		if let Some(last) = path.last() {
-		    let next_state = self.with_moved_amphipod(&who, &pos, &last);
+		    let next_state = self.with_moved_amphipod(who, pos, last);
 		    result.push((next_state, path.total_cost(unit_cost)));
 		} else {
 		    panic!(
@@ -509,12 +473,12 @@ impl State {
 	let paths = self.possible_moves_for_no_collision(current);
 	paths.into_iter()
 	    .map(|mut path: Path| -> Path {
-		path.sanity_check(&current)
+		path.sanity_check(current)
 		    .expect("possible_moves_for_no_collision should select a correct path");
 		path
 	    })
 	    //.inspect(|path| { println!("considering a path {:?}", &path); })
-	    .filter(|path| !self.is_path_blocked(&path))
+	    .filter(|path| !self.is_path_blocked(path))
 	    //.inspect(|_| { println!("path is not blocked"); })
 	    .collect()
     }
@@ -528,20 +492,6 @@ impl State {
 	    }
 	};
 	match p.get_type() {
-	    //LocationType::Room(owning_family) if owning_family == who.family => {
-	    //	// This amphipod is in its room.  Each room
-	    //	// contains 2 locations (y=1, y=2).
-	    //	match p.y {
-	    //	    2 => {
-	    //		// In theory the Amphipod could move up but
-	    //		// that is never part of a least-energy
-	    //		// solution.  Do nothing.
-	    //		vec![]
-	    //	    }
-	    //	    1 => vec![Path::from_step(p.south(1).unwrap())],
-	    //	    _ => unreachable!(),
-	    //	}
-	    //}
 	    LocationType::Room(owner) => {
 		// This amphipod is in someone else's room.  Legal
 		// moves are out of the room (stopping in the hallway
@@ -550,15 +500,15 @@ impl State {
 		let mut result: Vec<Path> = vec![
 		    match p.y {
 			2 => {
-			    Path::from_step(p.north(1).unwrap())
-				.checked(&p)
+			    Path::from_step(Position { x: p.x, y: p.y - 1 })
+				.checked(p)
 				.expect("valid")
 			}
 			1 => {
 			    // The Amphipod could move deeper into the
 			    // room if it is unoccupied.
-			    Path::from_step(p.south(1).unwrap())
-				.checked(&p)
+			    Path::from_step(Position {x: p.x, y: p.y + 1})
+				.checked(p)
 				.expect("valid")
 			}
 			_ => unreachable!(),
@@ -566,25 +516,25 @@ impl State {
 		];
 		if owner != *who {
 		    // This it not its own room, so it could step out onto the doormat and go home.
-		    let path_to_exit_doormat = self.path_to_exit_doormat(&p)
-			.checked(&p)
+		    let path_to_exit_doormat = self.path_to_exit_doormat(p)
+			.checked(p)
 			.expect("path_to_exit_doormat should be valid");
 		    let exit_doormat = Position { x: p.x, y: 0 };
 		    for path_exit_doormat_to_home in self.paths_from_hallway_to_home(who, &exit_doormat) {
 			let mut path = path_to_exit_doormat.join(&path_exit_doormat_to_home);
-			path.sanity_check(&p).expect("path to exit doormat should be valid and start at current position");
+			path.sanity_check(p).expect("path to exit doormat should be valid and start at current position");
 			result.push(path);
 		    }
 		}
 
 		// Or it could move out and park in the hallway instead.
-		let mut hallway_paths = self.paths_from_room_to_hallway(&p);
-		sanity_check_paths(hallway_paths.iter_mut(), &p).expect("hallway_paths should be valid");
+		let mut hallway_paths = self.paths_from_room_to_hallway(p);
+		sanity_check_paths(hallway_paths.iter_mut(), p).expect("hallway_paths should be valid");
 		result.extend(hallway_paths);
 
 		result.iter_mut()
 		    .for_each(|path| {
-			path.sanity_check(&p).expect("possible_moves_for_no_collision should create a valid path from a room");
+			path.sanity_check(p).expect("possible_moves_for_no_collision should create a valid path from a room");
 		    });
 		result
 	    }
@@ -593,27 +543,15 @@ impl State {
 	    LocationType::Hallway => {
 		// Amphipods which are currently in the hallway are
 		// locked in place until they can move to their home.
-		self.paths_from_hallway_to_home(who, &p)
+		self.paths_from_hallway_to_home(who, p)
 	    }
 	}
-    }
-
-    fn paths_from_own_doormat_to_home(&self, doormat: &Position) -> Vec<Path> {
-	assert_eq!(doormat.y, 0);
-	assert!(matches!(doormat.x, 2|4|6|8));
-	let first: Position = doormat.south(1).unwrap();
-	let second: Position = doormat.south(2).unwrap();
-	let mut result = vec![Path::from_step(first),
-			      Path::from_steps(vec![first, second])];
-	sanity_check_paths(result.iter_mut(), doormat)
-	    .expect("paths_from_own_doormat_to_home should generate correct paths");
-	result
     }
 
     fn path_from_hallway_to_doormat(&self, who: &Amphipod, current: &Position) -> Path {
 	assert_eq!(current.y, 0); // in hallway
 	assert!((0..=10).contains(&current.x)); // in hallway
-	let doormat = Position::doormat_of(&who);
+	let doormat = Position::doormat_of(who);
 	let mut result = if doormat.x > current.x {
 	    Path {
 		steps: ((current.x + 1)..=doormat.x)
@@ -629,7 +567,7 @@ impl State {
 		checked: None,
 	    }
 	};
-	result.sanity_check(&current).expect("valid path to doormat");
+	result.sanity_check(current).expect("valid path to doormat");
 	assert_eq!(result.last().expect("non-empty path"), &doormat,
 		   "path should end at doormat");
 	result
@@ -646,7 +584,7 @@ impl State {
 	    LocationType::Hallway | LocationType::Doormat(_) => {
 		// the amphipod is in the hallway or on someone else's
 		// doormat.
-		let home_doormat = Position::doormat_of(&who);
+		let home_doormat = Position::doormat_of(who);
 		if &home_doormat == current {
 		    // The amphipod was already on its home doormat,
 		    // and that is not allowed (since it is not
@@ -655,9 +593,11 @@ impl State {
 		} else {
 		    let path_to_own_doormat: Path = self.path_from_hallway_to_doormat(who, current)
 			.checked(current).expect("valid path");
-		    let first: Path = path_to_own_doormat.clone().then_move_to(home_doormat.south(1).unwrap())
+		    let first: Path = path_to_own_doormat.then_move_to(
+			Position { x: home_doormat.x, y: home_doormat.y + 1})
 			.checked(current).expect("valid path (first)");
-		    let second: Path = first.clone().then_move_to(home_doormat.south(2).unwrap())
+		    let second: Path = first.clone().then_move_to(
+			Position { x: home_doormat.x, y: home_doormat.y + 2})
 			.checked(current).expect("valid path (second)");
 		    vec![first, second]
 		}
@@ -711,7 +651,7 @@ impl TryFrom<&Vec<(Amphipod, Position)>> for State {
     fn try_from(squished: &Vec<(Amphipod, Position)>) -> Result<State, String> {
 	let mut result = State::new();
 	for (who, pos) in squished.iter() {
-	    if result.location_contents.contains_key(&pos) {
+	    if result.location_contents.contains_key(pos) {
 		return Err(format!("position {:?} has multiple occupants", &pos));
 	    } else {
 		result.location_contents.insert(*pos, *who);
@@ -792,7 +732,7 @@ fn test_unblocked_moves_for() {
     assert!(paths.is_empty(), "unexpected paths {:#?}", paths);
 }
 
-fn squished_state_is_goal(s: &SquishedState) -> bool {
+fn squished_state_is_goal(s: &[(Amphipod, Position)]) -> bool {
     let mut found: usize = 0;
     let mut seen: HashSet<Position> = HashSet::new();
     for (who, pos) in s.iter() {
@@ -861,6 +801,7 @@ fn parse_board(board: &str) -> Result<State, String> {
     }
 }
 
+#[cfg(test)]
 fn sample_input() -> State {
     //            1
     //  01234567890
@@ -898,51 +839,22 @@ fn test_parse_board() {
     assert_eq!(sample_parsed, sample_handcoded);
 }
 
-fn real_input() -> State {
-    //            1
-    //  01234567890
-    // ############# y
-    // #...........# 0
-    // ###B#B#D#D### 1
-    //   #C#A#A#C#   2
-    //   #########
-    //  01234567890
-    //            1
-    let mut s = State::new();
-    s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::A);
-    s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::A);
-    s.location_contents.insert(Position { x: 2, y: 1 }, Amphipod::B);
-    s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::B);
-    s.location_contents.insert(Position { x: 2, y: 2 }, Amphipod::C);
-    s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::C);
-    s.location_contents.insert(Position { x: 6, y: 1 }, Amphipod::D);
-    s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
-    s
-}
-
 #[test]
 fn test_successors() {
-    //            1
-    //  01234567890
-    // ############# y
-    // #.B.D.A.....# 0
-    // ###.#B#.#D### 1
-    //   #.#A#C#C#   2
-    //   #########
-    //            1
-    //  01234567890
+    let s = parse_board(
+	concat!(
+	    //          1
+	    //01234567890
+	    "#############\n",
+	    "#.B.D.A.....#\n",
+	    "###.#B#.#D###\n",
+	    "  #.#A#C#C#  \n",
+	    "  #########  \n",
+	    //          1
+	    //01234567890
+	)).expect("valid test input");
 
-    let mut s = State::new();
-    s.location_contents.insert(Position { x: 5, y: 0 }, Amphipod::A);
-    s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::A);
-    s.location_contents.insert(Position { x: 1, y: 0 }, Amphipod::B);
-    s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::B);
-    s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::C);
-    s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::C);
-    s.location_contents.insert(Position { x: 3, y: 0 }, Amphipod::D);
-    s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
-
-    let succ_states: Vec<(State, Cost)> = s.next_possible_states();
+    let succ_states = s.next_possible_states();
     assert!(
 	!succ_states.is_empty(),
 	"State\n{}\nshould have at least one successor (moving the D at (8,1) to (9,0))",
@@ -951,8 +863,24 @@ fn test_successors() {
 }
 
 fn main() {
-    let start = real_input();
-    println!("Initial state:\n{}", start);
-    let part1cost = solve(&start);
-    println!("Day 23 part 1: cost is {}", part1cost);
+    let mut input = String::new();
+    match io::stdin().read_to_string(&mut input) {
+        Ok(_) => (),
+        Err(e) => {
+	    eprintln!("failed to read input: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    match parse_board(&input) {
+	Ok(start) => {
+	    println!("Initial state:\n{}", start);
+	    let part1cost = solve(&start);
+	    println!("Day 23 part 1: cost is {}", part1cost);
+	}
+	Err(e) => {
+	    eprintln!("failed to parse input: {}", e);
+            std::process::exit(1);
+	}
+    };
 }
