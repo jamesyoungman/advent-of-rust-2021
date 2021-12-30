@@ -1,7 +1,11 @@
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::cmp::{max, min};
-use std::fmt::{self, Debug, Formatter};
-use std::ops::{Add, Mul};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::{Add, AddAssign, Mul};
+
+use pathfinding::directed::astar::astar;
+use pathfinding::num_traits::Zero;
 
 //            1
 //  01234567890
@@ -16,10 +20,25 @@ use std::ops::{Add, Mul};
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 struct Cost(u64);
 
+impl Zero for Cost {
+    fn zero() -> Self {
+	Cost(0)
+    }
+    fn is_zero(&self) -> bool {
+	self.0 == 0
+    }
+}
+
 impl Mul<u64> for Cost {
     type Output = Cost;
     fn mul(self, n: u64) -> <Self as Mul<u64>>::Output {
 	Cost(self.0 * n)
+    }
+}
+
+impl AddAssign<Cost> for Cost {
+    fn add_assign(&mut self, rhs: Cost) {
+	self.0 += rhs.0
     }
 }
 
@@ -30,7 +49,14 @@ impl Add<Cost> for Cost {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+impl Display for Cost {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 enum Family {
     A, B, C, D
 }
@@ -44,15 +70,24 @@ impl Family {
 	    Family::D => Cost(1000),
 	}
     }
+
+    fn symbol(&self) -> &'static str {
+	match self {
+	    Family::A => "A",
+	    Family::B => "B",
+	    Family::C => "C",
+	    Family::D => "D",
+	}
+    }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 enum MemberId {
     Zero,
     One,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 struct Amphipod {
     family: Family,
     id: MemberId,
@@ -73,6 +108,16 @@ impl Amphipod {
     fn move_cost(&self) -> Cost {
 	self.family.move_cost()
     }
+
+    fn all() -> Vec<Amphipod> {
+	let mut result = Vec::with_capacity(8);
+	for family in [Family::A, Family::B, Family::C, Family::D] {
+	    for id in [MemberId::Zero, MemberId::One] {
+		result.push(Amphipod { family, id });
+	    }
+	}
+	result
+    }
 }
 
 
@@ -83,7 +128,7 @@ enum LocationType {
     Room(Family),
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 struct Position {
     x: u8,
     y: u8,
@@ -153,16 +198,14 @@ impl Position {
     fn west(&self, dist: u8) -> Option<Position> {
 	if self.y > 0 {
 	    None		// cannot move east/west in room.
+	} else if dist <= self.x {
+	    let x = self.x - dist;
+	    Some(Position {
+		x,
+		y: 0,
+	    })
 	} else {
-	    if dist <= self.x {
-		let x = self.x - dist;
-		Some(Position {
-		    x,
-		    y: 0,
-		})
-	    } else {
-		None
-	    }
+	    None
 	}
     }
 
@@ -315,6 +358,10 @@ impl Path {
     fn last(&self) -> Option<&Position> {
 	self.steps.last()
     }
+
+    fn total_cost(&self, unit_cost: Cost) -> Cost {
+	unit_cost * (self.steps.len() as u64)
+    }
 }
 
 fn sanity_check_paths<'a, I>(paths: I, start: &Position) -> Result<(), String>
@@ -329,40 +376,50 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct State {
-    a: [Position; 2],
-    b: [Position; 2],
-    c: [Position; 2],
-    d: [Position; 2],
+    location_contents: HashMap<Position, Amphipod>,
+    locations: HashMap<Amphipod, Position>,
 }
 
+type SquishedState = Vec<(Amphipod,Position)>;
+
+
 impl State {
+    pub fn new() -> State {
+	State {
+	    location_contents: HashMap::with_capacity(8),
+	    locations: HashMap::with_capacity(8),
+	}
+    }
+
+    pub fn squish(&self) -> Vec<(Amphipod, Position)> {
+	self.locations.iter().map(|(a,p)| (*a, *p)).collect()
+    }
+
+    fn set_pos(&mut self, who: &Amphipod, pos: &Position) {
+	self.location_contents.insert(*pos, *who);
+	self.locations.insert(*who, *pos);
+    }
+
     fn with_moved_amphipod(&self, who: &Amphipod, dest: &Position) -> State {
 	let mut next: State = self.clone();
-	match who.family {
-	    Family::A => { next.a[who.index()] = *dest; }
-	    Family::B => { next.b[who.index()] = *dest; }
-	    Family::C => { next.c[who.index()] = *dest; }
-	    Family::D => { next.d[who.index()] = *dest; }
+	if let Some(current_pos) = next.locations.remove(who) {
+	    if &current_pos == dest {
+		panic!("with_moved_amphipod: it did not actually move");
+	    } else {
+		next.set_pos(who, dest);
+		next
+	    }
+	} else {
+	    panic!("with_moved_amphipod: amphipod {:?} has no existing location", who);
 	}
-	next
     }
 
     fn position_is_occupied(&self, pos: &Position) -> bool {
-	for i in 0..2 {
-	    if &self.a[i] == pos || &self.b[i] == pos || &self.c[i] == pos || &self.d[i] == pos {
-		return true;
-	    }
-	}
-	false
+	self.location_contents.contains_key(pos)
     }
 
     fn position_of(&self, who: &Amphipod) -> Position {
-	match who.family {
-	    Family::A => self.a[who.index()],
-	    Family::B => self.b[who.index()],
-	    Family::C => self.c[who.index()],
-	    Family::D => self.d[who.index()],
-	}
+	*self.locations.get(who).expect("all amphipods should have a position")
     }
 
     fn is_path_blocked(&self, path: &Path) -> bool {
@@ -438,6 +495,69 @@ impl State {
 	}
 	sanity_check_paths(result.iter_mut(), current)
 	    .expect("paths_from_room_to_hallway should generate valid paths");
+	result
+    }
+
+    fn is_goal(&self) -> bool {
+	for who in Amphipod::all() {
+	    let pos: Position = self.position_of(&who);
+	    match pos.get_type() {
+		LocationType::Room(owning_family) if owning_family == who.family => (),
+		_ => {
+		    return false;
+		}
+	    }
+	}
+	true
+    }
+
+    fn heuristic(&self) -> Cost {
+	let mut total_h: Cost = Cost(0);
+	for who in Amphipod::all() {
+	    let pos: Position = self.position_of(&who);
+	    let moves: u64 = match pos.get_type() {
+		LocationType::Room(owner) if owner == who.family => {
+		    // already home
+		    0
+		}
+		_ => {
+		    let doormat = Position::doormat_of(&who.family);
+		    // manhattan distiance is an underestimate when
+		    // the amphipod is in another family's room.  This
+		    // does not violate the requirements on the
+		    // heuristic.
+		    //
+		    // We add 1 because the amphipod has to at least
+		    // step off the doormat into its room.  Since some
+		    // amphipods have to move to the bottom of their
+		    // room, this is another respect in which this
+		    // heuristic is an underestimate.
+		    Position::manhattan(&pos, &doormat) + 1
+		}
+	    };
+	    total_h += who.move_cost() * moves;
+	}
+	total_h
+    }
+
+    fn next_possible_states(&self) -> Vec<(State, Cost)> {
+	let mut result = Vec::new();
+	for who in Amphipod::all() {
+	    let unit_cost: Cost = who.move_cost();
+	    let paths = self.unblocked_moves_for(&who);
+	    for path in paths {
+		if let Some(last) = path.last() {
+		    let next_state = self.with_moved_amphipod(&who, &last);
+		    result.push((next_state, path.total_cost(unit_cost)));
+		} else {
+		    panic!(
+			"unblocked_moves_for({:?}) suggested an empty path {:?}",
+			&who,
+			&path,
+		    );
+		}
+	    }
+	}
 	result
     }
 
@@ -543,7 +663,7 @@ impl State {
 	let doormat = Position::doormat_of(&who.family);
 	let mut result = if doormat.x > current.x {
 	    Path {
-		steps: ((current.x + 1)..doormat.x)
+		steps: ((current.x + 1)..=doormat.x)
 		    .map(|x| Position { x, y: 0 })
 		    .collect(),
 		checked: None,
@@ -594,6 +714,70 @@ impl State {
     }
 }
 
+impl Display for State {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+	f.write_str("#############\n")?;
+	for y in 0..3 {
+	    if matches!(y, 0|1) {
+		f.write_str("#")?;
+	    } else {
+		f.write_str(" ")?;
+	    }
+	    for x in 0..11 {
+		let pos = Position { x, y };
+		let symbol = if y == 0 || matches!(x, 2|4|6|8) {
+		    match self.location_contents.get(&pos) {
+			Some(a) => a.family.symbol(),
+			None => ".",
+		    }
+		} else {
+		    match x {
+			1|3|5|7|9 => "#",
+			_ => match y {
+			    1 => "#",
+			    _ => " ",
+			}
+		    }
+		};
+		f.write_str(symbol)?;
+	    }
+	    if matches!(y, 0|1) {
+		f.write_str("#\n")?;
+	    } else {
+		f.write_str("\n")?;
+	    }
+	}
+	f.write_str("  #########\n")?;
+	Ok(())
+    }
+}
+
+
+impl TryFrom<&Vec<(Amphipod, Position)>> for State {
+    type Error = String;
+    fn try_from(squished: &Vec<(Amphipod, Position)>) -> Result<State, String> {
+	let mut result = State::new();
+	for (who, pos) in squished.iter() {
+	    if result.locations.contains_key(&who) {
+		return Err(format!("amphipod {:?} apppears multiple times in the input", &who));
+	    } else if result.location_contents.contains_key(&pos) {
+		return Err(format!("position {:?} apppears multiple times in the input", &pos));
+	    } else {
+		result.set_pos(who, pos);
+	    }
+	}
+	if result.location_contents.len() != 8 {
+	    Err(format!("expected 8 items in location_contents, got {}",
+			result.location_contents.len()))
+	} else if result.locations.len() != 8 {
+	    Err(format!("expected 8 items in locations, got {}",
+			result.locations.len()))
+	} else {
+	    Ok(result)
+	}
+    }
+}
+
 #[test]
 fn test_unblocked_moves_for() {
     //            1
@@ -609,15 +793,19 @@ fn test_unblocked_moves_for() {
 	family: Family::B,
 	id: MemberId::One,
     };
-    let current = State {
-	a: [Position { x: 2, y: 2 },
-	    Position { x: 8, y: 2 }],
-	b: [Position { x: 2, y: 1 },
-	    Position { x: 6, y: 1 }], // this is b1
-	c: [Position { x: 4, y: 1 },
-	    Position { x: 6, y: 2 }], // this is c1
-	d: [Position { x: 4, y: 2 },
-	    Position { x: 8, y: 1 }],
+    let current: State = {
+	let mut s = State::new();
+	use MemberId::{Zero, One};
+	use Family::{A, B, C, D};
+	s.set_pos(&Amphipod { family: A, id: Zero }, &Position { x: 2, y: 2 });
+	s.set_pos(&Amphipod { family: A, id: One }, &Position { x: 8, y: 2 });
+	s.set_pos(&Amphipod { family: B, id: Zero }, &Position { x: 2, y: 1 });
+	s.set_pos(&Amphipod { family: B, id: One }, &Position { x: 6, y: 1 });
+	s.set_pos(&Amphipod { family: C, id: Zero }, &Position { x: 4, y: 1 });
+	s.set_pos(&Amphipod { family: C, id: One }, &Position { x: 6, y: 2 }); // this is c1
+	s.set_pos(&Amphipod { family: D, id: Zero }, &Position { x: 4, y: 2 });
+	s.set_pos(&Amphipod { family: D, id: One }, &Position { x: 8, y: 1 });
+	s
     };
     assert_eq!(current.position_of(&b1), Position { x: 6, y: 1 });
     let paths = current.unblocked_moves_for(&b1);
@@ -662,4 +850,112 @@ fn test_unblocked_moves_for() {
     };
     let paths = current.unblocked_moves_for(&c1);
     assert!(paths.is_empty());
+}
+
+fn squished_state_is_goal(s: &SquishedState) -> bool {
+    let mut wanted: HashSet<Amphipod> = HashSet::with_capacity(8);
+    for who in Amphipod::all() {
+	wanted.insert(who);
+    }
+    for (who, pos) in s {
+	match pos.get_type() {
+	    LocationType::Room(owning_family) if owning_family == who.family => (),
+	    _ => {
+		return false;
+	    }
+	}
+	wanted.remove(who);
+    }
+    if wanted.is_empty() {
+	true
+    } else {
+	panic!("squished state lacks some amphipods: {:?}", &wanted);
+    }
+}
+
+fn solve(start: &State) -> Cost {
+    let heuristic = |s: &SquishedState| -> Cost {
+	State::try_from(s).expect("valid state").heuristic()
+    };
+    let success = |s: &SquishedState| -> bool {
+	squished_state_is_goal(s)
+    };
+    let successors = |s: &SquishedState| -> Vec<(SquishedState, Cost)> {
+	let state = State::try_from(s).expect("valid state");
+	let succ_states: Vec<(State, Cost)> = state.next_possible_states();
+	println!("considering successors of state:\n{}\n... there are {} successors",
+		 &state, succ_states.len());
+	let result: Vec<(SquishedState, Cost)> = succ_states.into_iter()
+	    .map(|(s, cost)| (s.squish(), cost))
+	    .collect();
+	result
+    };
+    let initial_squished_state = start.squish();
+    match astar(&initial_squished_state, successors, heuristic, success) {
+        Some((_path, cost)) => cost,
+        None => {
+            panic!("no solution found");
+        }
+    }
+}
+
+const A0: Amphipod = Amphipod { family: Family::A, id: MemberId::Zero };
+const A1: Amphipod = Amphipod { family: Family::A, id: MemberId::One };
+const B0: Amphipod = Amphipod { family: Family::B, id: MemberId::Zero };
+const B1: Amphipod = Amphipod { family: Family::B, id: MemberId::One };
+const C0: Amphipod = Amphipod { family: Family::C, id: MemberId::Zero };
+const C1: Amphipod = Amphipod { family: Family::C, id: MemberId::One };
+const D0: Amphipod = Amphipod { family: Family::D, id: MemberId::Zero };
+const D1: Amphipod = Amphipod { family: Family::D, id: MemberId::One };
+
+fn sample_input() -> State {
+    //            1
+    //  01234567890
+    // #############
+    // #...........# 0 (hallway)
+    // ###B#C#B#D### 1 (room)
+    //   #A#D#C#A#   2 (room)
+    //   #########
+    //  01234567890
+    //            1
+    let mut s = State::new();
+    s.set_pos(&A0, &Position { x: 2, y: 2 });
+    s.set_pos(&A1, &Position { x: 8, y: 2 });
+    s.set_pos(&B0, &Position { x: 2, y: 1 });
+    s.set_pos(&B1, &Position { x: 6, y: 1 });
+    s.set_pos(&C0, &Position { x: 4, y: 1 });
+    s.set_pos(&C1, &Position { x: 6, y: 2 });
+    s.set_pos(&D0, &Position { x: 4, y: 2 });
+    s.set_pos(&D1, &Position { x: 8, y: 1 });
+    s
+}
+
+fn real_input() -> State {
+    //            1
+    //  01234567890
+    // ############# y
+    // #...........# 0
+    // ###B#B#D#D### 1
+    //   #C#A#A#C#   2
+    //   #########
+    //  01234567890
+    //            1
+    let mut s = State::new();
+    s.set_pos(&A0, &Position { x: 4, y: 2 });
+    s.set_pos(&A1, &Position { x: 6, y: 2 });
+    s.set_pos(&B0, &Position { x: 2, y: 1 });
+    s.set_pos(&B1, &Position { x: 4, y: 1 });
+    s.set_pos(&C0, &Position { x: 2, y: 2 });
+    s.set_pos(&C1, &Position { x: 8, y: 2 });
+    s.set_pos(&D0, &Position { x: 6, y: 1 });
+    s.set_pos(&D1, &Position { x: 8, y: 1 });
+    s
+}
+
+
+fn main() {
+    let start = real_input();
+    println!("Initial state:\n{}", start);
+    let part1cost = solve(&start);
+    println!("Day 23 part 1: cost is {}", part1cost);
 }
