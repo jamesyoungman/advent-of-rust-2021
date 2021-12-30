@@ -56,79 +56,52 @@ impl Display for Cost {
 }
 
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-enum Family {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+enum Amphipod {
     A, B, C, D
 }
 
-impl Family {
-    fn move_cost(&self) -> Cost {
-	match self {
-	    Family::A => Cost(1),
-	    Family::B => Cost(10),
-	    Family::C => Cost(100),
-	    Family::D => Cost(1000),
-	}
-    }
-
-    fn symbol(&self) -> &'static str {
-	match self {
-	    Family::A => "A",
-	    Family::B => "B",
-	    Family::C => "C",
-	    Family::D => "D",
-	}
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-enum MemberId {
-    Zero,
-    One,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-struct Amphipod {
-    family: Family,
-    id: MemberId,
-}
-
 impl Amphipod {
-    fn family(&self) -> Family {
-	self.family
-    }
-
-    fn index(&self) -> usize {
-	match self.id {
-	    MemberId::Zero => 0,
-	    MemberId::One => 1,
-	}
-    }
-
     fn move_cost(&self) -> Cost {
-	self.family.move_cost()
+	match self {
+	    Amphipod::A => Cost(1),
+	    Amphipod::B => Cost(10),
+	    Amphipod::C => Cost(100),
+	    Amphipod::D => Cost(1000),
+	}
     }
 
-    fn all() -> Vec<Amphipod> {
-	let mut result = Vec::with_capacity(8);
-	for family in [Family::A, Family::B, Family::C, Family::D] {
-	    for id in [MemberId::Zero, MemberId::One] {
-		result.push(Amphipod { family, id });
-	    }
+    fn symbol(&self) -> char {
+	match self {
+	    Amphipod::A => 'A',
+	    Amphipod::B => 'B',
+	    Amphipod::C => 'C',
+	    Amphipod::D => 'D',
 	}
-	result
     }
 }
 
+impl TryFrom<char> for Amphipod {
+    type Error = String;
+    fn try_from(ch: char) -> Result<Amphipod, String> {
+	match ch {
+	    'A' => Ok(Amphipod::A),
+	    'B' => Ok(Amphipod::B),
+	    'C' => Ok(Amphipod::C),
+	    'D' => Ok(Amphipod::D),
+	    _ => Err(format!("unknown symbol {}, should be A, B, C or D", ch))
+	}
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum LocationType {
     Hallway,
-    Doormat(Family),		// immediately outside room
-    Room(Family),
+    Doormat(Amphipod),		// immediately outside room
+    Room(Amphipod),
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 struct Position {
     x: u8,
     y: u8,
@@ -179,42 +152,12 @@ impl Position {
 	}
     }
 
-    fn east(&self, dist: u8) -> Option<Position> {
-	if self.y > 0 {
-	    None		// cannot move east/west in room.
-	} else {
-	    let x = self.x + dist;
-	    if x <= 10 {
-		Some(Position {
-		    x,
-		    y: 0,
-		})
-	    } else {
-		None
-	    }
-	}
-    }
-
-    fn west(&self, dist: u8) -> Option<Position> {
-	if self.y > 0 {
-	    None		// cannot move east/west in room.
-	} else if dist <= self.x {
-	    let x = self.x - dist;
-	    Some(Position {
-		x,
-		y: 0,
-	    })
-	} else {
-	    None
-	}
-    }
-
-    fn doormat_of(family: &Family) -> Position {
-	let x = match family {
-	    Family::A => 2,
-	    Family::B => 4,
-	    Family::C => 6,
-	    Family::D => 8,
+    fn doormat_of(who: &Amphipod) -> Position {
+	let x = match who {
+	    Amphipod::A => 2,
+	    Amphipod::B => 4,
+	    Amphipod::C => 6,
+	    Amphipod::D => 8,
 	};
 	Position {
 	    x,
@@ -222,12 +165,12 @@ impl Position {
 	}
     }
 
-    fn is_column_for(x: u8) -> Option<Family> {
+    fn is_column_for(x: u8) -> Option<Amphipod> {
 	match x {
-	    2 => Some(Family::A),
-	    4 => Some(Family::B),
-	    6 => Some(Family::C),
-	    8 => Some(Family::D),
+	    2 => Some(Amphipod::A),
+	    4 => Some(Amphipod::B),
+	    6 => Some(Amphipod::C),
+	    8 => Some(Amphipod::D),
 	    _ => None,
 	}
     }
@@ -248,17 +191,6 @@ impl Position {
     fn is_doormat(&self) -> bool {
 	matches!(self.get_type(), LocationType::Doormat(_))
     }
-
-    fn is_in_any_room(&self) -> bool {
-	matches!(self.get_type(), LocationType::Room(_))
-    }
-
-    fn is_in_room(&self, whose: &Family) -> bool {
-	match self.get_type() {
-	    LocationType::Room(actual) if &actual == whose => true,
-	    _ => false,
-	}
-    }
 }
 
 #[derive(Clone)]
@@ -275,13 +207,6 @@ impl Debug for Path {
 }
 
 impl Path {
-    fn new() -> Path {
-	Path {
-	    steps: Vec::new(),
-	    checked: None,
-	}
-    }
-
     fn from_step(pos: Position) -> Path {
 	Path {
 	    steps: vec![pos],
@@ -377,7 +302,6 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct State {
     location_contents: HashMap<Position, Amphipod>,
-    locations: HashMap<Amphipod, Position>,
 }
 
 type SquishedState = Vec<(Amphipod,Position)>;
@@ -387,39 +311,59 @@ impl State {
     pub fn new() -> State {
 	State {
 	    location_contents: HashMap::with_capacity(8),
-	    locations: HashMap::with_capacity(8),
 	}
     }
 
+    pub fn is_complete(&self) -> bool {
+	let mut counts: HashMap<Amphipod, usize> = HashMap::new();
+	for who in self.location_contents.values() {
+	    *counts.entry(*who).or_insert(0) += 1
+	}
+	counts.get(&Amphipod::A) == Some(&2) &&
+	    counts.get(&Amphipod::B) == Some(&2) &&
+	    counts.get(&Amphipod::C) == Some(&2) &&
+	    counts.get(&Amphipod::D) == Some(&2)
+    }
+
     pub fn squish(&self) -> Vec<(Amphipod, Position)> {
-	self.locations.iter().map(|(a,p)| (*a, *p)).collect()
+	let mut result: Vec<(Amphipod, Position)> = self.location_contents.iter()
+	    .map(|(pos, who)| (*who, *pos))
+	    .collect();
+	// We sort the result so that equivalent states always have a
+	// consistent representation.
+	result.sort();
+	result
     }
 
     fn set_pos(&mut self, who: &Amphipod, pos: &Position) {
 	self.location_contents.insert(*pos, *who);
-	self.locations.insert(*who, *pos);
     }
 
-    fn with_moved_amphipod(&self, who: &Amphipod, dest: &Position) -> State {
-	let mut next: State = self.clone();
-	if let Some(current_pos) = next.locations.remove(who) {
-	    if &current_pos == dest {
-		panic!("with_moved_amphipod: it did not actually move");
-	    } else {
-		next.set_pos(who, dest);
-		next
-	    }
-	} else {
-	    panic!("with_moved_amphipod: amphipod {:?} has no existing location", who);
+    fn with_moved_amphipod(&self, who: &Amphipod, from: &Position, to: &Position) -> State {
+	if from == to {
+	    panic!("with_moved_amphipod: it did not actually move");
 	}
+	if let Some(existing) = self.location_contents.get(&to) {
+	    panic!(
+		"with_moved_amphipod: destination {:?} already contains {:?}",
+		to,
+		existing,
+	    );
+	}
+	let mut next = State::new();
+	for (pos, current_occupant) in self.location_contents.iter() {
+	    if pos == from {
+		assert_eq!(current_occupant, who);
+	    } else {
+		next.location_contents.insert(*pos, *current_occupant); // did not move
+	    }
+	}
+	next.location_contents.insert(*to, *who);
+	next
     }
 
     fn position_is_occupied(&self, pos: &Position) -> bool {
 	self.location_contents.contains_key(pos)
-    }
-
-    fn position_of(&self, who: &Amphipod) -> Position {
-	*self.locations.get(who).expect("all amphipods should have a position")
     }
 
     fn is_path_blocked(&self, path: &Path) -> bool {
@@ -499,29 +443,27 @@ impl State {
     }
 
     fn is_goal(&self) -> bool {
-	for who in Amphipod::all() {
-	    let pos: Position = self.position_of(&who);
-	    match pos.get_type() {
-		LocationType::Room(owning_family) if owning_family == who.family => (),
-		_ => {
-		    return false;
-		}
-	    }
-	}
-	true
+	true &&
+	    self.location_contents.get(&Position{x: 2, y: 1}) == Some(&Amphipod::A) &&
+	    self.location_contents.get(&Position{x: 2, y: 2}) == Some(&Amphipod::A) &&
+	    self.location_contents.get(&Position{x: 4, y: 1}) == Some(&Amphipod::B) &&
+	    self.location_contents.get(&Position{x: 4, y: 2}) == Some(&Amphipod::B) &&
+	    self.location_contents.get(&Position{x: 6, y: 1}) == Some(&Amphipod::C) &&
+	    self.location_contents.get(&Position{x: 6, y: 2}) == Some(&Amphipod::C) &&
+	    self.location_contents.get(&Position{x: 8, y: 1}) == Some(&Amphipod::D) &&
+	    self.location_contents.get(&Position{x: 8, y: 2}) == Some(&Amphipod::D)
     }
 
     fn heuristic(&self) -> Cost {
 	let mut total_h: Cost = Cost(0);
-	for who in Amphipod::all() {
-	    let pos: Position = self.position_of(&who);
+	for (pos, who) in self.location_contents.iter() {
 	    let moves: u64 = match pos.get_type() {
-		LocationType::Room(owner) if owner == who.family => {
+		LocationType::Room(owner) if &owner == who => {
 		    // already home
 		    0
 		}
 		_ => {
-		    let doormat = Position::doormat_of(&who.family);
+		    let doormat = Position::doormat_of(&who);
 		    // manhattan distiance is an underestimate when
 		    // the amphipod is in another family's room.  This
 		    // does not violate the requirements on the
@@ -542,17 +484,18 @@ impl State {
 
     fn next_possible_states(&self) -> Vec<(State, Cost)> {
 	let mut result = Vec::new();
-	for who in Amphipod::all() {
+	for (pos, who) in self.location_contents.iter() {
 	    let unit_cost: Cost = who.move_cost();
-	    let paths = self.unblocked_moves_for(&who);
+	    let paths = self.unblocked_moves_for(&pos);
 	    for path in paths {
 		if let Some(last) = path.last() {
-		    let next_state = self.with_moved_amphipod(&who, &last);
+		    let next_state = self.with_moved_amphipod(&who, &pos, &last);
 		    result.push((next_state, path.total_cost(unit_cost)));
 		} else {
 		    panic!(
-			"unblocked_moves_for({:?}) suggested an empty path {:?}",
+			"unblocked_moves_for({:?}) at {:?} suggested an empty path {:?}",
 			&who,
+			&pos,
 			&path,
 		    );
 		}
@@ -561,38 +504,45 @@ impl State {
 	result
     }
 
-    fn unblocked_moves_for(&self, who: &Amphipod) -> Vec<Path> {
-	let current = self.position_of(who);
-	let paths = self.possible_moves_for_no_collision(who);
+    fn unblocked_moves_for(&self, current: &Position) -> Vec<Path> {
+	//println!("considering moves for occupant of {:?}", &current);
+	let paths = self.possible_moves_for_no_collision(current);
 	paths.into_iter()
 	    .map(|mut path: Path| -> Path {
 		path.sanity_check(&current)
 		    .expect("possible_moves_for_no_collision should select a correct path");
 		path
 	    })
+	    //.inspect(|path| { println!("considering a path {:?}", &path); })
 	    .filter(|path| !self.is_path_blocked(&path))
+	    //.inspect(|_| { println!("path is not blocked"); })
 	    .collect()
     }
 
     /// Compute the possible moves for `who` without regard to collision.
-    fn possible_moves_for_no_collision(&self, who: &Amphipod) -> Vec<Path> {
-	let p = self.position_of(who);
-	match p.get_type() {
-	    LocationType::Room(owning_family) if owning_family == who.family => {
-		// This amphipod is in its room.  Each room
-		// contains 2 locations (y=1, y=2).
-		match p.y {
-		    2 => {
-			// In theory the Amphipod could move up but
-			// that is never part of a least-energy
-			// solution.  Do nothing.
-			vec![]
-		    }
-		    1 => vec![Path::from_step(p.south(1).unwrap())],
-		    _ => unreachable!(),
-		}
+    fn possible_moves_for_no_collision(&self, p: &Position) -> Vec<Path> {
+	let who = match self.location_contents.get(p) {
+	    Some(who) => who,
+	    None => {
+		panic!("possible_moves_for_no_collision: called for unoccupied position {:?}", p);
 	    }
-	    LocationType::Room(_) => {
+	};
+	match p.get_type() {
+	    //LocationType::Room(owning_family) if owning_family == who.family => {
+	    //	// This amphipod is in its room.  Each room
+	    //	// contains 2 locations (y=1, y=2).
+	    //	match p.y {
+	    //	    2 => {
+	    //		// In theory the Amphipod could move up but
+	    //		// that is never part of a least-energy
+	    //		// solution.  Do nothing.
+	    //		vec![]
+	    //	    }
+	    //	    1 => vec![Path::from_step(p.south(1).unwrap())],
+	    //	    _ => unreachable!(),
+	    //	}
+	    //}
+	    LocationType::Room(owner) => {
 		// This amphipod is in someone else's room.  Legal
 		// moves are out of the room (stopping in the hallway
 		// or in its home) or to another location within the
@@ -614,15 +564,17 @@ impl State {
 			_ => unreachable!(),
 		    }
 		];
-		// In either case it could step out onto the doormat and go home.
-		let path_to_exit_doormat = self.path_to_exit_doormat(&p)
-		    .checked(&p)
-		    .expect("path_to_exit_doormat should be valid");
-		let exit_doormat = Position { x: p.x, y: 0 };
-		for path_exit_doormat_to_home in self.paths_from_hallway_to_home(who, &exit_doormat) {
-		    let mut path = path_to_exit_doormat.join(&path_exit_doormat_to_home);
-		    path.sanity_check(&p).expect("path to exit doormat should be valid and start at current position");
-		    result.push(path);
+		if owner != *who {
+		    // This it not its own room, so it could step out onto the doormat and go home.
+		    let path_to_exit_doormat = self.path_to_exit_doormat(&p)
+			.checked(&p)
+			.expect("path_to_exit_doormat should be valid");
+		    let exit_doormat = Position { x: p.x, y: 0 };
+		    for path_exit_doormat_to_home in self.paths_from_hallway_to_home(who, &exit_doormat) {
+			let mut path = path_to_exit_doormat.join(&path_exit_doormat_to_home);
+			path.sanity_check(&p).expect("path to exit doormat should be valid and start at current position");
+			result.push(path);
+		    }
 		}
 
 		// Or it could move out and park in the hallway instead.
@@ -653,14 +605,15 @@ impl State {
 	let second: Position = doormat.south(2).unwrap();
 	let mut result = vec![Path::from_step(first),
 			      Path::from_steps(vec![first, second])];
-	sanity_check_paths(result.iter_mut(), doormat);
+	sanity_check_paths(result.iter_mut(), doormat)
+	    .expect("paths_from_own_doormat_to_home should generate correct paths");
 	result
     }
 
     fn path_from_hallway_to_doormat(&self, who: &Amphipod, current: &Position) -> Path {
 	assert_eq!(current.y, 0); // in hallway
 	assert!((0..=10).contains(&current.x)); // in hallway
-	let doormat = Position::doormat_of(&who.family);
+	let doormat = Position::doormat_of(&who);
 	let mut result = if doormat.x > current.x {
 	    Path {
 		steps: ((current.x + 1)..=doormat.x)
@@ -693,7 +646,7 @@ impl State {
 	    LocationType::Hallway | LocationType::Doormat(_) => {
 		// the amphipod is in the hallway or on someone else's
 		// doormat.
-		let home_doormat = Position::doormat_of(&who.family);
+		let home_doormat = Position::doormat_of(&who);
 		if &home_doormat == current {
 		    // The amphipod was already on its home doormat,
 		    // and that is not allowed (since it is not
@@ -725,21 +678,21 @@ impl Display for State {
 	    }
 	    for x in 0..11 {
 		let pos = Position { x, y };
-		let symbol = if y == 0 || matches!(x, 2|4|6|8) {
+		let symbol: char = if y == 0 || matches!(x, 2|4|6|8) {
 		    match self.location_contents.get(&pos) {
-			Some(a) => a.family.symbol(),
-			None => ".",
+			Some(a) => a.symbol(),
+			None => '.',
 		    }
 		} else {
 		    match x {
-			1|3|5|7|9 => "#",
+			1|3|5|7|9 => '#',
 			_ => match y {
-			    1 => "#",
-			    _ => " ",
+			    1 => '#',
+			    _ => ' ',
 			}
 		    }
 		};
-		f.write_str(symbol)?;
+		write!(f, "{}", symbol)?;
 	    }
 	    if matches!(y, 0|1) {
 		f.write_str("#\n")?;
@@ -758,20 +711,15 @@ impl TryFrom<&Vec<(Amphipod, Position)>> for State {
     fn try_from(squished: &Vec<(Amphipod, Position)>) -> Result<State, String> {
 	let mut result = State::new();
 	for (who, pos) in squished.iter() {
-	    if result.locations.contains_key(&who) {
-		return Err(format!("amphipod {:?} apppears multiple times in the input", &who));
-	    } else if result.location_contents.contains_key(&pos) {
-		return Err(format!("position {:?} apppears multiple times in the input", &pos));
+	    if result.location_contents.contains_key(&pos) {
+		return Err(format!("position {:?} has multiple occupants", &pos));
 	    } else {
-		result.set_pos(who, pos);
+		result.location_contents.insert(*pos, *who);
 	    }
 	}
 	if result.location_contents.len() != 8 {
 	    Err(format!("expected 8 items in location_contents, got {}",
 			result.location_contents.len()))
-	} else if result.locations.len() != 8 {
-	    Err(format!("expected 8 items in locations, got {}",
-			result.locations.len()))
 	} else {
 	    Ok(result)
 	}
@@ -789,26 +737,22 @@ fn test_unblocked_moves_for() {
     //   #########
     //  01234567890
     //            1
-    let b1 = Amphipod {
-	family: Family::B,
-	id: MemberId::One,
-    };
     let current: State = {
 	let mut s = State::new();
-	use MemberId::{Zero, One};
-	use Family::{A, B, C, D};
-	s.set_pos(&Amphipod { family: A, id: Zero }, &Position { x: 2, y: 2 });
-	s.set_pos(&Amphipod { family: A, id: One }, &Position { x: 8, y: 2 });
-	s.set_pos(&Amphipod { family: B, id: Zero }, &Position { x: 2, y: 1 });
-	s.set_pos(&Amphipod { family: B, id: One }, &Position { x: 6, y: 1 });
-	s.set_pos(&Amphipod { family: C, id: Zero }, &Position { x: 4, y: 1 });
-	s.set_pos(&Amphipod { family: C, id: One }, &Position { x: 6, y: 2 }); // this is c1
-	s.set_pos(&Amphipod { family: D, id: Zero }, &Position { x: 4, y: 2 });
-	s.set_pos(&Amphipod { family: D, id: One }, &Position { x: 8, y: 1 });
+	s.location_contents.insert(Position { x: 2, y: 2 }, Amphipod::A);
+	s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::A);
+	s.location_contents.insert(Position { x: 2, y: 1 }, Amphipod::B);
+	s.location_contents.insert(Position { x: 6, y: 1 }, Amphipod::B);
+	s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::C);
+	s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::C);
+	s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::D);
+	s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
 	s
     };
-    assert_eq!(current.position_of(&b1), Position { x: 6, y: 1 });
-    let paths = current.unblocked_moves_for(&b1);
+    assert_eq!(current.location_contents.get(&Position { x: 6, y: 1 }),
+	       Some(&Amphipod::B));
+
+    let paths = current.unblocked_moves_for(&Position {x: 6, y: 1 });
     dbg!(&paths);
     let mut destinations: HashSet<u8> = HashSet::with_capacity(10);
     for path in paths {
@@ -843,34 +787,26 @@ fn test_unblocked_moves_for() {
     assert!(destinations.contains(&10));
     assert_eq!(destinations.len(), 7);
 
-    // c1 is at (6,2) and cannot move because (6,1) is occupied by b1.
-    let c1 = Amphipod {
-	family: Family::C,
-	id: MemberId::One,
-    };
-    let paths = current.unblocked_moves_for(&c1);
-    assert!(paths.is_empty());
+    // The C at (6,2) and cannot move because (6,1) is occupied by a B.
+    let paths = current.unblocked_moves_for(&Position {x: 6, y: 2});
+    assert!(paths.is_empty(), "unexpected paths {:#?}", paths);
 }
 
 fn squished_state_is_goal(s: &SquishedState) -> bool {
-    let mut wanted: HashSet<Amphipod> = HashSet::with_capacity(8);
-    for who in Amphipod::all() {
-	wanted.insert(who);
-    }
-    for (who, pos) in s {
-	match pos.get_type() {
-	    LocationType::Room(owning_family) if owning_family == who.family => (),
-	    _ => {
-		return false;
-	    }
+    let mut found: usize = 0;
+    let mut seen: HashSet<Position> = HashSet::new();
+    for (who, pos) in s.iter() {
+	if seen.contains(pos) {
+	    panic!("position {:?} occurs twice in squished state", pos);
+	} else {
+	    seen.insert(*pos);
 	}
-	wanted.remove(who);
+	match pos.get_type() {
+	    LocationType::Room(owner) if owner == *who => { found += 1; }
+	    _ => { return false; }
+	}
     }
-    if wanted.is_empty() {
-	true
-    } else {
-	panic!("squished state lacks some amphipods: {:?}", &wanted);
-    }
+    found == 8
 }
 
 fn solve(start: &State) -> Cost {
@@ -899,14 +835,31 @@ fn solve(start: &State) -> Cost {
     }
 }
 
-const A0: Amphipod = Amphipod { family: Family::A, id: MemberId::Zero };
-const A1: Amphipod = Amphipod { family: Family::A, id: MemberId::One };
-const B0: Amphipod = Amphipod { family: Family::B, id: MemberId::Zero };
-const B1: Amphipod = Amphipod { family: Family::B, id: MemberId::One };
-const C0: Amphipod = Amphipod { family: Family::C, id: MemberId::Zero };
-const C1: Amphipod = Amphipod { family: Family::C, id: MemberId::One };
-const D0: Amphipod = Amphipod { family: Family::D, id: MemberId::Zero };
-const D1: Amphipod = Amphipod { family: Family::D, id: MemberId::One };
+fn parse_board(board: &str) -> Result<State, String> {
+    let mut result = State::new();
+    for (y, line) in board.split_terminator('\n').skip(1).enumerate() {
+	for (x, ch) in line.chars().skip(1).enumerate() {
+	    let pos = Position{ x: x as u8, y: y as u8, };
+	    match ch {
+		'.'|' '|'#' => (),
+		_ => match Amphipod::try_from(ch) {
+		    Ok(who) => {
+			result.set_pos(&who, &pos);
+		    }
+		    Err(e) => {
+			return Err(format!("failed to parse line {} ('{}'): {}",
+					   y+2, &line, e));
+		    }
+		}
+	    }
+	}
+    }
+    if result.is_complete() {
+	Ok(result)
+    } else {
+	Err("some amphipods are missing".to_string())
+    }
+}
 
 fn sample_input() -> State {
     //            1
@@ -919,15 +872,30 @@ fn sample_input() -> State {
     //  01234567890
     //            1
     let mut s = State::new();
-    s.set_pos(&A0, &Position { x: 2, y: 2 });
-    s.set_pos(&A1, &Position { x: 8, y: 2 });
-    s.set_pos(&B0, &Position { x: 2, y: 1 });
-    s.set_pos(&B1, &Position { x: 6, y: 1 });
-    s.set_pos(&C0, &Position { x: 4, y: 1 });
-    s.set_pos(&C1, &Position { x: 6, y: 2 });
-    s.set_pos(&D0, &Position { x: 4, y: 2 });
-    s.set_pos(&D1, &Position { x: 8, y: 1 });
+    s.location_contents.insert(Position { x: 2, y: 2 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 2, y: 1 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 6, y: 1 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::D);
+    s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
     s
+}
+
+#[test]
+fn test_parse_board() {
+    let sample_handcoded = sample_input();
+    let sample_parsed = parse_board(
+	concat!(
+	    "#############\n",
+	    "#...........#\n",
+	    "###B#C#B#D###\n",
+	    "  #A#D#C#A#  \n",
+	    "  #########  \n",
+	)
+    ).expect("test input should be valid");
+    assert_eq!(sample_parsed, sample_handcoded);
 }
 
 fn real_input() -> State {
@@ -941,17 +909,46 @@ fn real_input() -> State {
     //  01234567890
     //            1
     let mut s = State::new();
-    s.set_pos(&A0, &Position { x: 4, y: 2 });
-    s.set_pos(&A1, &Position { x: 6, y: 2 });
-    s.set_pos(&B0, &Position { x: 2, y: 1 });
-    s.set_pos(&B1, &Position { x: 4, y: 1 });
-    s.set_pos(&C0, &Position { x: 2, y: 2 });
-    s.set_pos(&C1, &Position { x: 8, y: 2 });
-    s.set_pos(&D0, &Position { x: 6, y: 1 });
-    s.set_pos(&D1, &Position { x: 8, y: 1 });
+    s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 2, y: 1 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 2, y: 2 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 6, y: 1 }, Amphipod::D);
+    s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
     s
 }
 
+#[test]
+fn test_successors() {
+    //            1
+    //  01234567890
+    // ############# y
+    // #.B.D.A.....# 0
+    // ###.#B#.#D### 1
+    //   #.#A#C#C#   2
+    //   #########
+    //            1
+    //  01234567890
+
+    let mut s = State::new();
+    s.location_contents.insert(Position { x: 5, y: 0 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 4, y: 2 }, Amphipod::A);
+    s.location_contents.insert(Position { x: 1, y: 0 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 4, y: 1 }, Amphipod::B);
+    s.location_contents.insert(Position { x: 6, y: 2 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 8, y: 2 }, Amphipod::C);
+    s.location_contents.insert(Position { x: 3, y: 0 }, Amphipod::D);
+    s.location_contents.insert(Position { x: 8, y: 1 }, Amphipod::D);
+
+    let succ_states: Vec<(State, Cost)> = s.next_possible_states();
+    assert!(
+	!succ_states.is_empty(),
+	"State\n{}\nshould have at least one successor (moving the D at (8,1) to (9,0))",
+	&s
+    );
+}
 
 fn main() {
     let start = real_input();
