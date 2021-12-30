@@ -484,6 +484,18 @@ impl State {
             .collect()
     }
 
+    fn home_contains_interlopers(&self, who: &Amphipod) -> bool {
+	let doormat = Position::doormat_of(who);
+	(1..=self.rules.room_len())
+	    .any(|y| {
+		let pos = Position { x: doormat.x, y };
+		match self.location_contents.get(&pos) {
+		    Some(occupant) if occupant != who => true,
+		    _ => false,
+		}
+	    })
+    }
+
     /// Compute the possible moves for `who` without regard to collision.
     fn possible_moves_for_no_collision(&self, p: &Position, rules: &Rules) -> Vec<Path> {
         let who = match self.location_contents.get(p) {
@@ -497,10 +509,25 @@ impl State {
         };
         match p.get_type(rules) {
             LocationType::Room(owner) => {
-                // This amphipod is in someone else's room.  Legal
-                // moves are out of the room (stopping in the hallway
-                // or in its home) or to another location within the
-                // room it is currently in.
+		if owner == *who {
+		    // This amphipod is already in its home room.
+		    if (p.y+1..=rules.room_len())
+			.all(|y| match self.location_contents.get(&Position{x: p.x, y}) {
+			    None => false,
+			    Some(x) if x == who => true,
+			    Some(_) => false,
+			}) {
+			    // All places below this amphipod are occupied
+			    // by other amphipods which also belong here.
+			    // Hence no need to consider moves for them.
+			    return Vec::new();
+			}
+		}
+
+                // This amphipod is in their or someone else's room.
+                // Legal moves are out of the room (stopping in the
+                // hallway or in its home) or to another location
+                // within the room it is currently in.
                 let in_room_y_dests = (1..=rules.room_len()).filter(|y| y != &p.y); // filter out current location
 
                 let mut result: Vec<Path> = in_room_y_dests
@@ -545,7 +572,16 @@ impl State {
             LocationType::Hallway => {
                 // Amphipods which are currently in the hallway are
                 // locked in place until they can move to their home.
-                self.paths_from_hallway_to_home(who, p, rules)
+		if !self.home_contains_interlopers(who) {
+                    self.paths_from_hallway_to_home(who, p, rules)
+		} else {
+		    // Rule 2: an amphipod will never move from the
+		    // hallway ito a room unless unless that room is
+		    // their destination room and that room contains
+		    // no amphipods which do not also have that room
+		    // as their own destination.
+		    Vec::new()
+		}
             }
         }
     }
