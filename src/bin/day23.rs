@@ -1,4 +1,4 @@
-use std::cmp::{max, min};
+use std::cmp::{max, min, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -284,12 +284,12 @@ impl Path {
 
 fn make_vertical_path(pos: &Position, y_dest: u8) -> Path {
     let mut ys: Vec<u8> = Vec::with_capacity(5);
-    if pos.y < y_dest {
-        ys.extend((pos.y + 1)..=y_dest);
-    } else if pos.y > y_dest {
-        ys.extend((y_dest..pos.y).rev())
-    } else {
-        panic!("make_vertical_path called, but destination is current location");
+    match pos.y.cmp(&y_dest) {
+	Ordering::Less => { ys.extend((pos.y + 1)..=y_dest); }
+        Ordering::Greater => { ys.extend((y_dest..pos.y).rev()); }
+        Ordering::Equal => {
+            panic!("make_vertical_path called, but destination is current location");
+	}
     }
     Path::from_steps(ys.into_iter().map(|y| Position { x: pos.x, y }).collect())
 }
@@ -624,7 +624,7 @@ impl State {
 		    }
 		    assert!(target_y > 0);
 		    vec![path_to_own_doormat.join(&make_vertical_path(&home_doormat, target_y))
-			 .checked(&current).expect("valid path")]
+			 .checked(current).expect("valid path")]
                 }
             }
             LocationType::Room(_) => unreachable!(),
@@ -670,9 +670,9 @@ impl Display for State {
     }
 }
 
-impl TryFrom<(&Rules, &Vec<(Amphipod, Position)>)> for State {
+impl TryFrom<(&Rules, &[(Amphipod, Position)])> for State {
     type Error = String;
-    fn try_from(input: (&Rules, &Vec<(Amphipod, Position)>)) -> Result<State, String> {
+    fn try_from(input: (&Rules, &[(Amphipod, Position)])) -> Result<State, String> {
         let (rules, items) = input;
 
         let mut result = State::new(rules.clone());
@@ -800,14 +800,14 @@ fn solve(
     rules: &Rules
 ) -> Result<(Vec<SquishedState>, Cost), String> {
     let heuristic = |s: &SquishedState| -> Cost {
-        let input: (&Rules, &Vec<(Amphipod, Position)>) = (rules, s);
+        let input: (&Rules, &[(Amphipod, Position)]) = (rules, s);
         State::try_from(input)
             .expect("valid state")
             .heuristic(rules)
     };
     let success = |s: &SquishedState| -> bool { squished_state_is_goal(s, rules) };
     let successors = |s: &SquishedState| -> Vec<(SquishedState, Cost)> {
-        let input: (&Rules, &Vec<(Amphipod, Position)>) = (rules, s);
+        let input: (&Rules, &[(Amphipod, Position)]) = (rules, s);
         let state = State::try_from(input).expect("valid state");
         let succ_states: Vec<(State, Cost)> = state.next_possible_states(rules);
         //println!(
@@ -824,7 +824,7 @@ fn solve(
     let initial_squished_state = start.squish();
     match astar(&initial_squished_state, successors, heuristic, success) {
         Some((path, cost)) => Ok((path, cost)),
-        None => Err(format!("no solution found")),
+        None => Err("no solution found".to_string()),
     }
 }
 
@@ -967,10 +967,10 @@ fn initial_state_for_part2(part1state: &State, rules2: Rules) -> State {
 }
 
 fn show_squished_state(
-    s: &SquishedState,
+    s: &[(Amphipod, Position)],
     rules: &Rules
 ) -> String {
-    let input: (&Rules, &Vec<(Amphipod, Position)>) = (rules, s);
+    let input: (&Rules, &[(Amphipod, Position)]) = (rules, s);
     State::try_from(input).expect("should be valid solution state").to_string()
 }
 
