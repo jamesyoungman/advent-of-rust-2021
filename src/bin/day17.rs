@@ -92,11 +92,15 @@ fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<Pair>
     for _iter in 0.. {
         x += xv;
         y += yv;
-	match xv.cmp(&0) {
-	    Ordering::Greater => { xv -= 1; }
-	    Ordering::Equal => (),
-	    Ordering::Less => { xv += 1; }
-	}
+        match xv.cmp(&0) {
+            Ordering::Greater => {
+                xv -= 1;
+            }
+            Ordering::Equal => (),
+            Ordering::Less => {
+                xv += 1;
+            }
+        }
         yv -= 1;
         result.push((x, y));
         if y < target.y.start {
@@ -108,8 +112,7 @@ fn simulate(_name: &str, mut xv: i32, mut yv: i32, target: &Target) -> Vec<Pair>
 
 fn sim(name: &str, xv: i32, yv: i32, target: &Target) -> (bool, i32) {
     let points = simulate(name, xv, yv, target);
-    let hit = points.iter()
-        .any(|(x, y)| target.contains(*x, *y));
+    let hit = points.iter().any(|(x, y)| target.contains(*x, *y));
     let high = points.iter().map(|(_x, y)| y).max().unwrap();
     (hit, *high)
 }
