@@ -128,15 +128,15 @@ impl Debug for Position {
 impl Position {
     fn manhattan(&self, other: &Position) -> u64 {
         let xdist: u64 = u64::from(max(self.x, other.x)) - u64::from(min(self.x, other.x));
-	if xdist == 0 {
-	    u64::from(max(self.y, other.y)) - u64::from(min(self.y, other.y))
-	} else {
-	    // The distance to travel is the distance up the room
-	    // we're in (which is self.y), across the hallway (which
-	    // is xdist) and into the room we need to get to (which is
-	    // other.y)
-	    xdist + u64::from(self.y + other.y)
-	}
+        if xdist == 0 {
+            u64::from(max(self.y, other.y)) - u64::from(min(self.y, other.y))
+        } else {
+            // The distance to travel is the distance up the room
+            // we're in (which is self.y), across the hallway (which
+            // is xdist) and into the room we need to get to (which is
+            // other.y)
+            xdist + u64::from(self.y + other.y)
+        }
     }
 
     fn neighbours(&self, other: &Position) -> bool {
@@ -160,15 +160,15 @@ impl Position {
             4 => Some(Amphipod::B),
             6 => Some(Amphipod::C),
             8 => Some(Amphipod::D),
-	    _ => None,
+            _ => None,
         }
     }
 
     fn doormat_of(who: &Amphipod) -> Position {
         Position {
-	    x: Self::home_column_of(who),
-	    y: 0
-	}
+            x: Self::home_column_of(who),
+            y: 0,
+        }
     }
 
     fn is_column_for(x: u8) -> Option<Amphipod> {
@@ -285,11 +285,15 @@ impl Path {
 fn make_vertical_path(pos: &Position, y_dest: u8) -> Path {
     let mut ys: Vec<u8> = Vec::with_capacity(5);
     match pos.y.cmp(&y_dest) {
-	Ordering::Less => { ys.extend((pos.y + 1)..=y_dest); }
-        Ordering::Greater => { ys.extend((y_dest..pos.y).rev()); }
+        Ordering::Less => {
+            ys.extend((pos.y + 1)..=y_dest);
+        }
+        Ordering::Greater => {
+            ys.extend((y_dest..pos.y).rev());
+        }
         Ordering::Equal => {
             panic!("make_vertical_path called, but destination is current location");
-	}
+        }
     }
     Path::from_steps(ys.into_iter().map(|y| Position { x: pos.x, y }).collect())
 }
@@ -318,7 +322,7 @@ impl State {
     pub fn new(rules: Rules) -> State {
         State {
             location_contents: HashMap::with_capacity(8),
-	    ready: vec![Amphipod::A, Amphipod::B, Amphipod::C, Amphipod::D],
+            ready: vec![Amphipod::A, Amphipod::B, Amphipod::C, Amphipod::D],
             rules,
         }
     }
@@ -337,11 +341,11 @@ impl State {
 
     fn set_pos(&mut self, who: &Amphipod, pos: &Position) {
         self.location_contents.insert(*pos, *who);
-	if pos.y > 0 && pos.x != Position::home_column_of(who) {
-	    if let Some(owner) = Position::owner_of(pos.x) {
-		self.ready.retain(|x| x != &owner);
-	    }
-	}
+        if pos.y > 0 && pos.x != Position::home_column_of(who) {
+            if let Some(owner) = Position::owner_of(pos.x) {
+                self.ready.retain(|x| x != &owner);
+            }
+        }
     }
 
     fn with_moved_amphipod(&self, who: &Amphipod, from: &Position, to: &Position) -> State {
@@ -359,7 +363,7 @@ impl State {
             if pos == from {
                 assert_eq!(current_occupant, who);
             } else {
-		next.set_pos(current_occupant, pos); // did not move
+                next.set_pos(current_occupant, pos); // did not move
             }
         }
         next.set_pos(who, to);
@@ -478,7 +482,7 @@ impl State {
     }
 
     fn home_contains_interlopers(&self, who: &Amphipod) -> bool {
-	!self.ready.contains(who)
+        !self.ready.contains(who)
     }
 
     /// Compute the possible moves for `who` without regard to collision.
@@ -494,20 +498,21 @@ impl State {
         };
         match p.get_type(rules) {
             LocationType::Room(owner) => {
-		if owner == *who {
-		    // This amphipod is already in its home room.
-		    if (p.y+1..=rules.room_len())
-			.all(|y| match self.location_contents.get(&Position{x: p.x, y}) {
-			    None => false,
-			    Some(x) if x == who => true,
-			    Some(_) => false,
-			}) {
-			    // All places below this amphipod are occupied
-			    // by other amphipods which also belong here.
-			    // Hence no need to consider moves for them.
-			    return Vec::new();
-			}
-		}
+                if owner == *who {
+                    // This amphipod is already in its home room.
+                    if (p.y + 1..=rules.room_len()).all(|y| {
+                        match self.location_contents.get(&Position { x: p.x, y }) {
+                            None => false,
+                            Some(x) if x == who => true,
+                            Some(_) => false,
+                        }
+                    }) {
+                        // All places below this amphipod are occupied
+                        // by other amphipods which also belong here.
+                        // Hence no need to consider moves for them.
+                        return Vec::new();
+                    }
+                }
 
                 // This amphipod is in their or someone else's room.
                 // Legal moves are out of the room (stopping in the
@@ -519,11 +524,11 @@ impl State {
                     .map(|path| path.checked(p).expect("valid"))
                     .collect();
 
-		// We do not consider here the possibility that the
-		// amphipod could go directly home, instead
-		// considering the move into the hallway and the move
-		// into the final room as two moves (having the same
-		// total energy cost).
+                // We do not consider here the possibility that the
+                // amphipod could go directly home, instead
+                // considering the move into the hallway and the move
+                // into the final room as two moves (having the same
+                // total energy cost).
 
                 // Or it could move out and park in the hallway instead.
                 let mut hallway_paths = self.paths_from_room_to_hallway(p, rules);
@@ -543,16 +548,16 @@ impl State {
             LocationType::Hallway => {
                 // Amphipods which are currently in the hallway are
                 // locked in place until they can move to their home.
-		if !self.home_contains_interlopers(who) {
+                if !self.home_contains_interlopers(who) {
                     self.paths_from_hallway_to_home(who, p, rules)
-		} else {
-		    // Rule 2: an amphipod will never move from the
-		    // hallway ito a room unless unless that room is
-		    // their destination room and that room contains
-		    // no amphipods which do not also have that room
-		    // as their own destination.
-		    Vec::new()
-		}
+                } else {
+                    // Rule 2: an amphipod will never move from the
+                    // hallway ito a room unless unless that room is
+                    // their destination room and that room contains
+                    // no amphipods which do not also have that room
+                    // as their own destination.
+                    Vec::new()
+                }
             }
         }
     }
@@ -613,18 +618,23 @@ impl State {
                         .path_from_hallway_to_doormat(who, current)
                         .checked(current)
                         .expect("valid path");
-		    let mut target_y = 0;
-		    for y in 1..=rules.room_len() {
-			let pos = Position{x: home_doormat.x, y};
-			if self.location_contents.get(&pos).is_none() {
-			    target_y = y;
-			} else {
-			    break;
-			}
-		    }
-		    assert!(target_y > 0);
-		    vec![path_to_own_doormat.join(&make_vertical_path(&home_doormat, target_y))
-			 .checked(current).expect("valid path")]
+                    let mut target_y = 0;
+                    for y in 1..=rules.room_len() {
+                        let pos = Position {
+                            x: home_doormat.x,
+                            y,
+                        };
+                        if self.location_contents.get(&pos).is_none() {
+                            target_y = y;
+                        } else {
+                            break;
+                        }
+                    }
+                    assert!(target_y > 0);
+                    vec![path_to_own_doormat
+                        .join(&make_vertical_path(&home_doormat, target_y))
+                        .checked(current)
+                        .expect("valid path")]
                 }
             }
             LocationType::Room(_) => unreachable!(),
@@ -680,16 +690,16 @@ impl TryFrom<(&Rules, &[(Amphipod, Position)])> for State {
             if result.location_contents.contains_key(pos) {
                 return Err(format!("position {:?} has multiple occupants", &pos));
             } else {
-		result.set_pos(who, pos);
+                result.set_pos(who, pos);
             }
         }
-	let expected_count: usize = (4 * rules.room_len()).into();
+        let expected_count: usize = (4 * rules.room_len()).into();
         if result.location_contents.len() != expected_count {
             Err(format!(
                 "expected {} items in location_contents, got {}: {:?}",
-		expected_count,
+                expected_count,
                 result.location_contents.len(),
-		result.location_contents,
+                result.location_contents,
             ))
         } else {
             Ok(result)
@@ -795,10 +805,7 @@ fn squished_state_is_goal(s: &[(Amphipod, Position)], rules: &Rules) -> bool {
     found == (4 * rules.room_len()).into()
 }
 
-fn solve(
-    start: &State,
-    rules: &Rules
-) -> Result<(Vec<SquishedState>, Cost), String> {
+fn solve(start: &State, rules: &Rules) -> Result<(Vec<SquishedState>, Cost), String> {
     let heuristic = |s: &SquishedState| -> Cost {
         let input: (&Rules, &[(Amphipod, Position)]) = (rules, s);
         State::try_from(input)
@@ -966,14 +973,12 @@ fn initial_state_for_part2(part1state: &State, rules2: Rules) -> State {
     s
 }
 
-fn show_squished_state(
-    s: &[(Amphipod, Position)],
-    rules: &Rules
-) -> String {
+fn show_squished_state(s: &[(Amphipod, Position)], rules: &Rules) -> String {
     let input: (&Rules, &[(Amphipod, Position)]) = (rules, s);
-    State::try_from(input).expect("should be valid solution state").to_string()
+    State::try_from(input)
+        .expect("should be valid solution state")
+        .to_string()
 }
-
 
 fn main() {
     let mut input = String::new();
@@ -991,33 +996,39 @@ fn main() {
         Ok(start) => {
             println!("Initial state for part 1:\n{}", start);
             match solve(&start, &part1rules) {
-		Err(e) => {
-		    eprintln!("failed to solve part 1: {}", e);
-		}
-		Ok((path, cost)) => {
-		    for (i, state) in path.iter().enumerate() {
-			println!("Part 1 solution step {}:\n{}",
-				 i, show_squished_state(state, &part1rules));
-		    }
-		    println!("Day 23 part 1: cost is {}", cost);
-		}
-	    }
+                Err(e) => {
+                    eprintln!("failed to solve part 1: {}", e);
+                }
+                Ok((path, cost)) => {
+                    for (i, state) in path.iter().enumerate() {
+                        println!(
+                            "Part 1 solution step {}:\n{}",
+                            i,
+                            show_squished_state(state, &part1rules)
+                        );
+                    }
+                    println!("Day 23 part 1: cost is {}", cost);
+                }
+            }
 
             let start2 = initial_state_for_part2(&start, Rules::part2());
-	    drop(start);
+            drop(start);
             println!("Initial state for part 2:\n{}", start2);
-	    match solve(&start2, &part2rules) {
-		Err(e) => {
-		    eprintln!("failed to solve part 2: {}", e);
-		}
-		Ok((path, cost)) => {
-		    for (i, state) in path.iter().enumerate() {
-			println!("Part 2 solution step {}:\n{}",
-				 i, show_squished_state(state, &part2rules));
-		    }
-		    println!("Day 23 part 2: cost is {}", cost);
-		}
-	    }
+            match solve(&start2, &part2rules) {
+                Err(e) => {
+                    eprintln!("failed to solve part 2: {}", e);
+                }
+                Ok((path, cost)) => {
+                    for (i, state) in path.iter().enumerate() {
+                        println!(
+                            "Part 2 solution step {}:\n{}",
+                            i,
+                            show_squished_state(state, &part2rules)
+                        );
+                    }
+                    println!("Day 23 part 2: cost is {}", cost);
+                }
+            }
         }
         Err(e) => {
             eprintln!("failed to parse input: {}", e);
