@@ -139,11 +139,11 @@ fn fmt_subtree(
     f: &mut Formatter<'_>,
     from: usize,
     to: usize,
-    v: &[SnailDigit]
+    num: &[SnailDigit]
 ) -> fmt::Result {
     dbg!(&from);
     dbg!(&to);
-    dbg!(&v[from..to]);
+    dbg!(&num[from..to]);
     let w = to - from;
     dbg!(&w);
     if w == 0 {
@@ -151,14 +151,14 @@ fn fmt_subtree(
 	return Ok(());
     }
     let r = from + (to - from)/2;
-    match dbg!(v[dbg!(r)]) {
+    match dbg!(num[dbg!(r)]) {
 	SnailDigit::Empty => Ok(()),
 	SnailDigit::Internal => {
 	    println!("recursing into {:?} and then {:?}", from..r, r..to);
 	    f.write_str("[")
-		.and_then(|_| if r > from { fmt_subtree(f, from, r, v) } else { Ok(()) })
+		.and_then(|_| if r > from { fmt_subtree(f, from, r, num) } else { Ok(()) })
 		.and_then(|_| f.write_str(","))
-		.and_then(|_| if to > r { fmt_subtree(f, r, to, v) } else { Ok(()) })
+		.and_then(|_| if to > r { fmt_subtree(f, r, to, num) } else { Ok(()) })
 		.and_then(|_| f.write_str("]"))
 	}
 	SnailDigit::Literal(n) => {
