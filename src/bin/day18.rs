@@ -1,344 +1,364 @@
-use std::cmp::max;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::io::prelude::*;
-use std::str::FromStr;
 
-use nom::{
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{char, digit1},
-    combinator::{map, map_res, opt, recognize},
-    sequence::{preceded, separated_pair, terminated, tuple},
-    IResult,
-};
+use regex::{Captures, Regex};
 use tracing_subscriber::prelude::*;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum SnailDigit {
-    Empty,
-    Internal,
-    Literal(i8),
-}
-
-impl From<i8> for SnailDigit {
-    fn from(n: i8) -> SnailDigit {
-	SnailDigit::Literal(n)
-    }
-}
-
-impl Default for SnailDigit {
-    fn default() -> SnailDigit {
-	SnailDigit::Empty
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct SnailNum {
-    digits: Vec<SnailDigit>,
-}
+struct SnailNum(String);
 
-impl From<(i8, i8)> for SnailNum {
-    fn from(pair: (i8, i8)) -> SnailNum {
-	SnailNum {
-	    digits: vec![SnailDigit::from(pair.0),
-			 SnailDigit::Internal, // the root
-			 SnailDigit::from(pair.1),
-			 SnailDigit::Empty],
-	}
-    }
-}
-
-#[test]
-fn test_from_pair() {
-    assert_eq!(&SnailNum::from((5,3)),
-	       &SnailNum {
-		   digits: vec![
-		       SnailDigit::Literal(5),
-		       SnailDigit::Internal,
-		       SnailDigit::Literal(3),
-		       SnailDigit::Empty,
-		   ]
-	       });
-}
-
-
-fn fix_tail(
-    mut v: Vec<SnailDigit>,
-    fill: SnailDigit,
-) -> Vec<SnailDigit> {
-    let orig_size: usize = v.len();
-    loop {
-	match v.pop() {
-	    Some(SnailDigit::Literal(n)) => {
-		v.push(SnailDigit::Literal(n));
-		break;
-	    }
-	    None => {
-		break;
-	    }
-	    Some(SnailDigit::Internal | SnailDigit::Empty) => (),
-	}
-    }
-    v.resize(orig_size, fill);
-    v
-}
-
-
-fn stretch(v: &[SnailDigit],
-	   want_len: usize,
-	   fill: SnailDigit,
-) -> Vec<SnailDigit> {
-    let mut result = Vec::with_capacity(want_len);
-    let old_len = v.len();
-    let margin = (want_len - old_len) / 2;
-    result.resize(margin, SnailDigit::Empty);
-    result.extend(v);
-    result.resize(want_len, SnailDigit::Empty);
-    fix_tail(result, fill)
-}
-
-impl From<(&SnailNum, &SnailNum)> for SnailNum {
-    fn from(pair: (&SnailNum, &SnailNum)) -> SnailNum {
-	let (left, right) = pair;
-
-	let want_len = max(left.digits.len(), right.digits.len());
-	let left_result = stretch(&left.digits, want_len, SnailDigit::Internal);
-	assert_eq!(left_result.len(), want_len);
-
-	let right_result = stretch(&right.digits, want_len, SnailDigit::Empty);
-	assert_eq!(right_result.len(), want_len);
-
-	let mut v: Vec<SnailDigit> = Vec::with_capacity(want_len * 2);
-	assert_eq!(left_result.len(), right_result.len());
-	v.extend(left_result);
-	v.extend(right_result);
-	SnailNum {
-	    digits: v,
-	}
-    }
-}
-
-#[test]
-fn test_from_snailnum_pair() {
-    let a = SnailNum::from((1, 2));
-    let b = SnailNum::from((6, 8));
-    let c = SnailNum::from((&a, &b));
-    assert_eq!(&c.digits,
-	       &vec![SnailDigit::Literal(1),
-		     SnailDigit::Internal,
-		     SnailDigit::Literal(2),
-		     SnailDigit::Internal, // root
-		     SnailDigit::Literal(6),
-		     SnailDigit::Internal,
-		     SnailDigit::Literal(8),
-		     SnailDigit::Empty]);
-}
-
-fn fmt_subtree(
-    f: &mut Formatter<'_>,
-    from: usize,
-    to: usize,
-    num: &[SnailDigit]
-) -> fmt::Result {
-    dbg!(&from);
-    dbg!(&to);
-    dbg!(&num[from..to]);
-    let w = to - from;
-    dbg!(&w);
-    if w == 0 {
-	eprintln!("printing zero items");
-	return Ok(());
-    }
-    let r = from + (to - from)/2;
-    match dbg!(num[dbg!(r)]) {
-	SnailDigit::Empty => Ok(()),
-	SnailDigit::Internal => {
-	    println!("recursing into {:?} and then {:?}", from..r, r..to);
-	    f.write_str("[")
-		.and_then(|_| if r > from { fmt_subtree(f, from, r, num) } else { Ok(()) })
-		.and_then(|_| f.write_str(","))
-		.and_then(|_| if to > r { fmt_subtree(f, r, to, num) } else { Ok(()) })
-		.and_then(|_| f.write_str("]"))
-	}
-	SnailDigit::Literal(n) => {
-	    write!(f, "{}", n)
-	}
+impl From<&str> for SnailNum {
+    fn from(s: &str) -> SnailNum {
+        SnailNum(s.to_string())
     }
 }
 
 impl Display for SnailNum {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-	fmt_subtree(f, 0, self.digits.len()-1, self.digits.as_slice())
+        f.write_str(self.0.as_str())
     }
 }
-
-#[test]
-fn test_snailnum_display() {
-    assert_eq!(
-	&SnailNum {
-	    digits: vec![
-		SnailDigit::Literal(4),
-		SnailDigit::Internal,
-		SnailDigit::Literal(7),
-		SnailDigit::Empty,
-	    ]
-	}.to_string(),
-	"[4,7]");
-    assert_eq!(
-	&SnailNum {
-	    digits: vec![
-		SnailDigit::Literal(6),
-		SnailDigit::Internal,
-		SnailDigit::Literal(7),
-		SnailDigit::Internal,
-		SnailDigit::Empty,
-		SnailDigit::Literal(2),
-		SnailDigit::Empty,
-		SnailDigit::Empty,
-	    ]
-	}.to_string(),
-	"[[6,7],2]");
-}
-
-fn i8_parser(input: &str) -> IResult<&str, i8> {
-    map_res(
-        recognize(tuple((opt(char('-')), digit1))),
-        FromStr::from_str)
-	(input)
-}
-
-#[test]
-fn test_i8_parser() {
-    assert_eq!(i8_parser("5"), Ok(("", 5_i8)));
-    assert_eq!(i8_parser("54"), Ok(("", 54_i8)));
-    assert_eq!(i8_parser("-20"), Ok(("", -20_i8)));
-}
-
-fn naked_pair_parser(input: &str) -> IResult<&str, (SnailNum, SnailNum) > {
-    separated_pair(preceded(tag("["), snailnum_parser),
-		   char(','),
-		   terminated(snailnum_parser, tag("]")))
-	(input)
-}
-
-#[test]
-fn test_naked_pair_parser() {
-    assert_eq!(naked_pair_parser("[5,3]"),
-	       Ok(("",
-		   (
-		       SnailNum {
-			   digits: vec![
-			       SnailDigit::Literal(5),
-			       SnailDigit::Empty,
-			   ]
-		       },
-		       SnailNum {
-			   digits: vec![
-			       SnailDigit::Literal(3),
-			       SnailDigit::Empty,
-			   ]
-		       }
-		   ))));
-}
-
-
-fn pair_parser(input: &str) -> IResult<&str, SnailNum > {
-    map(naked_pair_parser,
-	|(left, right): (SnailNum, SnailNum)| SnailNum::from((&left, &right)))
-	(input)
-}
-
-fn snailnum_parser(input: &str)-> IResult<&str, SnailNum > {
-    alt((
-	map(i8_parser, |n| SnailNum { digits: vec![SnailDigit::Literal(n),
-						   SnailDigit::Empty] }),
-	pair_parser
-    ))(input)
-}
-
-#[test]
-fn test_snailnum_parser() {
-    assert_eq!(snailnum_parser("[5,3]"),
-	       Ok(("",
-		   (
-		       SnailNum {
-			   digits: vec![
-			       SnailDigit::Literal(5),
-			       SnailDigit::Internal,
-			       SnailDigit::Literal(3),
-			       SnailDigit::Empty,
-			   ]
-		       }
-		   ))));
-}
-
 
 fn parse_snail_number(s: &str) -> Result<SnailNum, String> {
-    match snailnum_parser(s) {
-	Ok((unparsed, n)) => {
-	    if unparsed.is_empty() {
-		Ok(n)
-	    } else {
-		Err(format!("unexpected junk after number: '{}'", unparsed))
-	    }
-	}
-	Err(e) => Err(e.to_string()),
+    Ok(SnailNum(s.to_string()))
+}
+
+fn find_explode_point(n: &SnailNum) -> Option<(usize, usize)> {
+    const EXPLODE_DEPTH: usize = 5;
+    let mut depth: usize = 0;
+    let mut explode_start: Option<usize> = None;
+    for (pos, ch) in n.0.chars().enumerate() {
+        //println!("find_explode_point: at {}, depth={}, explode_start={:?}, ch={}",
+        //	 pos, depth, explode_start, ch);
+        match ch {
+            '[' => {
+                if let Some(_) = explode_start {
+                    panic!("more than {} levels of nesting", EXPLODE_DEPTH);
+                } else {
+                    depth = match depth.checked_add(1) {
+                        None => {
+                            panic!("too many '['");
+                        }
+                        Some(d) => d,
+                    }
+                }
+            }
+            ']' => {
+                if let Some(start) = explode_start {
+                    return Some((start, pos));
+                } else {
+                    depth = match depth.checked_sub(1) {
+                        None => {
+                            panic!("number has more ']' than '['");
+                        }
+                        Some(d) => d,
+                    }
+                }
+            }
+            d if d.is_ascii_digit() => {
+                if depth == EXPLODE_DEPTH && explode_start.is_none() {
+                    explode_start = Some(pos);
+                }
+            }
+            ',' => (),
+            _ => {
+                panic!("unexpected character '{}'", ch);
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn test_find_explode_point() {
+    fn find_explode_substr(n: &SnailNum) -> Option<&str> {
+        match find_explode_point(n) {
+            Some((begin, end)) => n.0.get(begin..end),
+            None => None,
+        }
+    }
+
+    assert_eq!(find_explode_substr(&SnailNum::from("[1,2]")), None);
+    assert_eq!(find_explode_substr(&SnailNum::from("[[1,2],[3,4]]")), None);
+    assert_eq!(
+        find_explode_substr(&SnailNum::from("[[[[[9,8],1],2],3],4]")),
+        Some("9,8")
+    );
+}
+
+fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
+    match to_add.parse::<i32>() {
+        Ok(to_add) => match s.parse::<i32>() {
+            Ok(n) => (n + to_add).to_string(),
+            Err(e) => {
+                panic!("'{}' is not a number: {}", s, e);
+            }
+        },
+        Err(e) => {
+            panic!("'{}' is not a number: {}", to_add, e);
+        }
+    }
+}
+
+fn explode_lhs(s: &str, left_number: &str) -> String {
+    let rx = Regex::new(r"^(.*)(\d+)(\D*)").unwrap();
+    let add = |caps: &Captures| -> String {
+        format!(
+            "{}{}{}",
+            &caps[1],
+            &add_stringly_typed_number(&caps[2], left_number),
+            &caps[3]
+        )
+    };
+    rx.replace(s, add).to_string()
+}
+
+#[test]
+fn test_explode_lhs() {
+    assert_eq!(explode_lhs("[[[[", "9"), "[[[[".to_string());
+    assert_eq!(explode_lhs("[1,2],[", "4"), "[1,6],[");
+}
+
+fn explode_rhs(s: &str, right_number: &str) -> String {
+    let rx = Regex::new(r"^(\D*)(\d+)(.*)$").unwrap();
+    let add = |caps: &Captures| -> String {
+        format!(
+            "{}{}{}",
+            &caps[1],
+            &add_stringly_typed_number(&caps[2], right_number),
+            &caps[3]
+        )
+    };
+    rx.replace(s, add).to_string()
+}
+
+fn extract_pair(s: &str) -> (String, String) {
+    let rx = Regex::new(r"^\[(\d+),(\d+)\]").unwrap();
+    match rx.captures(s) {
+        Some(caps) => (caps[1].to_string(), caps[2].to_string()),
+        None => {
+            panic!("expected [...], got {}", s);
+        }
+    }
+}
+
+fn explode(n: SnailNum) -> (SnailNum, bool) {
+    match find_explode_point(&n) {
+        Some((mut begin, mut end)) => {
+            // n.0[begin..end] is the actual pair (e.g. "8,2").  but
+            // we actually want to replace "[8,2]" with 0.  So we
+            // widen our window by 1 in each direction.
+            begin -= 1;
+            end += 1;
+            //println!("begin is {}", begin);
+            //println!("end is {}", end);
+            match n.0.get(begin..end) {
+                Some(s) => {
+                    println!("  exploding pair {}", s);
+                    let (left_number, right_number) = extract_pair(s);
+                    let lhs = n.0.get(0..begin).unwrap();
+                    let rhs = n.0.get(end..).unwrap();
+                    let output = format!(
+                        "{}0{}",
+                        explode_lhs(lhs, &left_number),
+                        explode_rhs(rhs, &right_number)
+                    );
+                    println!("  exploding {} to produce {}", &n, &output);
+                    (SnailNum(output), true)
+                }
+                None => {
+                    panic!("find_explode_point returned invalid indexes");
+                }
+            }
+        }
+        None => (n, false), // no need to explode.
     }
 }
 
 #[test]
-fn test_parse_snail_number() {
-    assert_eq!(parse_snail_number("[4,7]"),
-	       Ok(SnailNum {
-		   digits: vec![
-		       SnailDigit::Literal(4),
-		       SnailDigit::Internal,
-		       SnailDigit::Literal(7),
-		       SnailDigit::Empty,
-		   ]
-	       }));
-
-    assert_eq!(parse_snail_number("[[6,7],2]"),
-	       Ok(SnailNum {
-		   digits: vec![
-		       SnailDigit::Literal(6),
-		       SnailDigit::Internal,
-		       SnailDigit::Literal(7),
-		       SnailDigit::Internal, // root
-		       SnailDigit::Empty,
-		       SnailDigit::Literal(2),
-		       SnailDigit::Empty,
-		       SnailDigit::Empty
-		   ]
-	       }));
+fn test_explode() {
+    assert_eq!(
+        explode(SnailNum::from("[1,2]")),
+        (SnailNum::from("[1,2]"), false)
+    );
+    assert_eq!(
+        explode(SnailNum::from("[[[[[9,8],1],2],3],4]")),
+        (SnailNum::from("[[[[0,9],2],3],4]"), true)
+    );
+    assert_eq!(
+        explode(SnailNum::from("[7,[6,[5,[4,[3,2]]]]]")),
+        (SnailNum::from("[7,[6,[5,[7,0]]]]"), true)
+    );
+    assert_eq!(
+        explode(SnailNum::from("[[6,[5,[4,[3,2]]]],1]")),
+        (SnailNum::from("[[6,[5,[7,0]]],3]"), true)
+    );
+    assert_eq!(
+        explode(SnailNum::from("[[3,[2,[1,[7,3]]]],[6,[5,[4,[3,2]]]]]")),
+        (SnailNum::from("[[3,[2,[8,0]]],[9,[5,[4,[3,2]]]]]"), true)
+    );
+    assert_eq!(
+        explode(SnailNum::from("[[3,[2,[8,0]]],[9,[5,[4,[3,2]]]]]")),
+        (SnailNum::from("[[3,[2,[8,0]]],[9,[5,[7,0]]]]"), true)
+    );
 }
 
+fn split(n: SnailNum) -> (SnailNum, bool) {
+    let rx = Regex::new(r"^(.*\D)(\d\d+)(\D.*)$").unwrap();
+    match rx.captures(&n.0) {
+        None => (n, false),
+        Some(caps) => match caps[2].parse::<i32>() {
+            Ok(big) => {
+                let left = big / 2;
+                let right = left + big % 2;
+                let newval: String = format!("{}[{},{}]{}", &caps[1], left, right, &caps[3]);
+                println!("  splitting {} to produce {}", &n, &newval);
+                (SnailNum::from(newval.as_str()), true)
+            }
+            Err(e) => {
+                panic!("expected number, got {} ({})", &caps[2], e);
+            }
+        },
+    }
+}
+
+#[test]
+fn test_split() {
+    assert_eq!(
+        split(SnailNum::from("[10,6]")),
+        (SnailNum::from("[[5,5],6]"), true)
+    );
+    assert_eq!(
+        split(SnailNum::from("[11,6]")),
+        (SnailNum::from("[[5,6],6]"), true)
+    );
+    assert_eq!(
+        split(SnailNum::from("[12,6]")),
+        (SnailNum::from("[[6,6],6]"), true)
+    );
+    //assert_eq!(split(SnailNum::from("[101,6]")), (SnailNum::from("[[50,51],6]"), true));
+}
+
+fn reduce(mut n: SnailNum) -> SnailNum {
+    loop {
+        println!("reducing {}", &n);
+        let (exploded_number, did_explode) = explode(n);
+        n = exploded_number;
+        if !did_explode {
+            let (split_number, changed) = split(n);
+            n = split_number;
+            if !changed {
+                break;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn test_reduce() {
+    assert_eq!(
+        reduce(SnailNum::from("[[[[[4,3],4],4],[7,[[8,4],9]]],[1,1]]")),
+        SnailNum::from("[[[[0,7],4],[[7,8],[6,0]]],[8,1]]")
+    );
+}
+
+fn add(left: SnailNum, right: SnailNum) -> SnailNum {
+    reduce(SnailNum::from(format!("[{},{}]", left, right).as_str()))
+}
+
+#[test]
+fn test_add() {
+    let left = SnailNum::from("[[[[4,3],4],4],[7,[[8,4],9]]]");
+    let right = SnailNum::from("[1,1]");
+    assert_eq!(
+        add(left, right),
+        SnailNum::from("[[[[0,7],4],[[7,8],[6,0]]],[8,1]]")
+    );
+}
+
+#[test]
+fn test_add_larger_example() {
+    assert_eq!(
+        add(
+            SnailNum::from("[[[0,[4,5]],[0,0]],[[[4,5],[2,6]],[9,5]]]"),
+            SnailNum::from("[7,[[[3,7],[4,3]],[[6,3],[8,8]]]]")
+        ),
+        SnailNum::from("[[[[4,0],[5,4]],[[7,7],[6,0]]],[[8,[7,7]],[[7,9],[5,0]]]]")
+    );
+}
+
+fn add_snail_numbers<I, S>(items: I) -> SnailNum
+where
+    I: IntoIterator<Item = S>,
+    S: Into<SnailNum>,
+{
+    let mut it = items.into_iter().map(|item| item.into());
+    match it.next() {
+        Some(first) => it.fold(first.into(), |acc, item| {
+            println!("Adding {} and {}", &acc, &item);
+            add(acc, item)
+        }),
+        None => {
+            panic!("There were no input items and I don't know what the Snalfish zero is");
+        }
+    }
+}
+
+#[test]
+fn test_add_snail_numbers_sample() {
+    assert_eq!(
+        add_snail_numbers(["[1,1]", "[2,2]", "[3,3]", "[4,4]"]),
+        SnailNum::from("[[[[1,1],[2,2]],[3,3]],[4,4]]")
+    );
+
+    assert_eq!(
+        add_snail_numbers(["[1,1]", "[2,2]", "[3,3]", "[4,4]", "[5,5]"]),
+        SnailNum::from("[[[[3,0],[5,3]],[4,4]],[5,5]]")
+    );
+
+    assert_eq!(
+        add_snail_numbers(["[1,1]", "[2,2]", "[3,3]", "[4,4]", "[5,5]", "[6,6]"]),
+        SnailNum::from("[[[[5,0],[7,4]],[5,5]],[6,6]]")
+    );
+}
+
+//#[test]
+//fn test_add_snail_numbers_large_example() {
+//    assert_eq!(add_snail_numbers(["[[[0,[4,5]],[0,0]],[[[4,5],[2,6]],[9,5]]]",
+//				  "[7,[[[3,7],[4,3]],[[6,3],[8,8]]]]",
+//				  "[[2,[[0,8],[3,4]]],[[[6,7],1],[7,[1,6]]]]",
+//				  "[[[[2,4],7],[6,[0,5]]],[[[6,8],[2,8]],[[2,1],[4,5]]]]",
+//				  "[7,[5,[[3,8],[1,4]]]]",
+//				  "[[2,[2,2]],[8,[8,1]]]",
+//				  "[2,9]",
+//				  "[1,[[[9,3],9],[[9,0],[0,7]]]]",
+//				  "[[[5,[7,4]],7],1]",
+//				  "[[[[4,2],2],6],[8,7]]"]),
+//	       SnailNum::from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]"));
+//}
 
 #[test]
 fn test_display_roundtrips() {
     for s in &[
-	//"[5,3]",
-	//"[5,[1,2]]",
-	//"[[1,2],5]",
-	//"[[1,2],[3,4]]",
-	"[[1,2],[[8,9],4]]",
+        "[5,3]",
+        "[5,[1,2]]",
+        "[[1,2],5]",
+        "[[1,2],[3,4]]",
+        "[[1,2],[[8,9],4]]",
     ] {
-	match parse_snail_number(s) {
-	    Ok(num) => {
-		dbg!(s);
-		dbg!(&num);
-		let formatted = num.to_string();
-		dbg!(&formatted);
-		assert_eq!(s, &formatted, "failed to round-trip parse/print");
-	    }
-	    Err(e) => {
-		panic!("failed to parse '{}': {}", s, e);
-	    }
-	}
+        match parse_snail_number(s) {
+            Ok(num) => {
+                let formatted = num.to_string();
+                assert_eq!(s, &formatted, "failed to round-trip parse/print");
+            }
+            Err(e) => {
+                panic!("failed to parse '{}': {}", s, e);
+            }
+        }
     }
 }
-
 
 fn part1(_nums: &[SnailNum]) {
 }
@@ -346,10 +366,10 @@ fn part1(_nums: &[SnailNum]) {
 fn run() -> Result<(), String> {
     let fmt_layer = tracing_subscriber::fmt::layer().with_target(true);
     let filter_layer = match tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new("info"))
+        .or_else(|_| tracing_subscriber::EnvFilter::try_new("debug"))
     {
         Err(e) => {
-	    eprintln!("{}", e);
+            eprintln!("{}", e);
             std::process::exit(1);
         }
         Ok(layer) => layer,
@@ -364,22 +384,26 @@ fn run() -> Result<(), String> {
         .lines()
         .map(|thing| thing.unwrap())
         .collect();
-    let parsed: Result<Vec<SnailNum>, String> = lines.iter()
-	.map(|line| -> Result<SnailNum, String> { parse_snail_number(line) })
-	.collect();
+    let parsed: Result<Vec<SnailNum>, String> = lines
+        .iter()
+        .map(|line| -> Result<SnailNum, String> { parse_snail_number(line) })
+        .collect();
     match parsed {
-	Ok(snail_numbers) => {
-	    println!("There are {} snail numbers in the input.", snail_numbers.len());
-	    part1(&snail_numbers);
-	    Ok(())
-	}
-	Err(e) => Err(e),
+        Ok(snail_numbers) => {
+            println!(
+                "There are {} snail numbers in the input.",
+                snail_numbers.len()
+            );
+            part1(&snail_numbers);
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
 }
 
 fn main() {
     if let Err(e) = run() {
-	eprintln!("{}", e);
-	std::process::exit(1);
+        eprintln!("{}", e);
+        std::process::exit(1);
     }
 }
