@@ -512,6 +512,21 @@ fn test_final_part1_example() {
 fn part1(nums: &[SnailNum]) {
     let eval = Evaluator::new();
     println!("Day 18 part 1: {}", eval.magnitude(eval.add_snail_numbers(nums.iter().map(|n| n.to_owned()))));
+
+}
+
+fn part2(nums: &[SnailNum]) {
+    let mut magnitudes: Vec<u64> = Vec::with_capacity(nums.len() * nums.len());
+    let eval = Evaluator::new();
+    for (i, left) in nums.iter().enumerate() {
+	for (j, right) in nums.iter().enumerate() {
+	    if i != j {
+		magnitudes.push(eval.magnitude(eval.add(left.clone(), right.clone())));
+	    }
+	}
+    }
+    magnitudes.sort();
+    println!("Day 18 part 2: {}", magnitudes.pop().unwrap());
 }
 
 fn run() -> Result<(), String> {
@@ -546,6 +561,7 @@ fn run() -> Result<(), String> {
                 snail_numbers.len()
             );
             part1(&snail_numbers);
+            part2(&snail_numbers);
             Ok(())
         }
         Err(e) => Err(e),
