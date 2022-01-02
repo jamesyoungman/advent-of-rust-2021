@@ -91,8 +91,8 @@ fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
         Ok(to_add) => match s.parse::<i32>() {
             Ok(n) => {
 		let result = (n + to_add).to_string();
-		println!("add_stringly_typed_number: {} + {} -> {}",
-			n, to_add, result);
+		//println!("add_stringly_typed_number: {} + {} -> {}",
+		//	n, to_add, result);
 		result
 	    }
             Err(e) => {
@@ -106,16 +106,16 @@ fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
 }
 
 fn explode_lhs(s: &str, left_number: &str) -> String {
-    println!("explode_lhs:  input={}", s);
+    //println!("explode_lhs:  input={}", s);
     let rx = Regex::new(r"^(.*\D)(\d+)(\D*)").unwrap();
     let add = |caps: &Captures| -> String {
 	let left = &caps[1];
 	let middle = add_stringly_typed_number(&caps[2], left_number);
 	let right = &caps[3];
-	println!("explode_lhs:   left={}", left);
-	println!("explode_lhs:caps[2]={}", &caps[2]);
-	println!("explode_lhs: middle={}", middle);
-	println!("explode_lhs:  right={}", right);
+	//println!("explode_lhs:   left={}", left);
+	//println!("explode_lhs:caps[2]={}", &caps[2]);
+	//println!("explode_lhs: middle={}", middle);
+	//println!("explode_lhs:  right={}", right);
         format!("{}{}{}", left, middle, right)
     };
     rx.replace(s, add).to_string()
@@ -162,7 +162,7 @@ fn explode(n: SnailNum) -> (SnailNum, bool) {
             //println!("end is {}", end);
             match n.0.get(begin..end) {
                 Some(s) => {
-                    println!("    exploding pair {}", s);
+                    //println!("    exploding pair {}", s);
                     let (left_number, right_number) = extract_pair(s);
                     let lhs = n.0.get(0..begin).unwrap();
                     let rhs = n.0.get(end..).unwrap();
@@ -379,6 +379,68 @@ fn test_add_snail_numbers_large_example() {
 	       SnailNum::from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]"));
 }
 
+fn magnitude(n: SnailNum) -> u64 {
+    let rx = Regex::new(r"\[(\d+),(\d+)]").unwrap();
+    let rxfinal = Regex::new(r"\[(\d+)]").unwrap();
+    let mut digits = n.0;
+    let mag_step = |caps: &Captures| -> String {
+	let left = &caps[1];
+	let right = &caps[2];
+	println!("mag_step: left={}, right={}", left, right);
+	match (left.parse::<u64>().map(|l| l.checked_mul(3)),
+	       right.parse::<u64>().map(|r| r.checked_mul(2))) {
+	    (Ok(None), _) => {
+		panic!("magnitude: overflow in {}*3", &left)
+	    }
+	    (_, Ok(None)) => {
+		panic!("magnitude: overflow in {}*2", &right)
+	    }
+	    (Ok(Some(l)), Ok(Some(r))) => match l.checked_add(r) {
+		Some(result) => {
+		    println!("mag_step; [{},{}] -> {}",
+			     left, right, result);
+		    format!("{}", result)
+		}
+		None => {
+		    panic!("magnitude: overflow in final addition {} + {}", &l, &r);
+		}
+	    }
+	    (Err(e), _) => {
+		panic!("magnitude: cannot convert number '{}': {}", left, e)
+	    }
+	    (_, Err(e)) => {
+		panic!("magnitude: cannot convert number '{}': {}", right, e)
+	    }
+	}
+    };
+    loop {
+	dbg!(&digits);
+	let updated = rx.replace(digits.as_str(), mag_step).to_string();
+	if updated == digits {
+	    let result_as_str = rxfinal.replace(digits.as_str(), "$1");
+	    match result_as_str.parse() {
+		Ok(n) => {
+		    return n;
+		}
+		Err(e) => {
+		    panic!("magnitude: cannot convert final result {}: {}", &result_as_str, e);
+		}
+	    }
+	}
+	digits = updated;
+    }
+}
+
+#[test]
+fn test_magnitude() {
+    assert_eq!(magnitude(SnailNum::from("[9,1]")), 29);
+    assert_eq!(magnitude(SnailNum::from("[1,9]")), 21);
+    assert_eq!(magnitude(SnailNum::from("[[9,1],[1,9]]")), 129);
+    assert_eq!(magnitude(SnailNum::from("[[1,2],[[3,4],5]]")), 143);
+    assert_eq!(magnitude(SnailNum::from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]")), 3488);
+}
+
+
 #[test]
 fn test_display_roundtrips() {
     for s in &[
@@ -400,7 +462,25 @@ fn test_display_roundtrips() {
     }
 }
 
-fn part1(_nums: &[SnailNum]) {
+#[test]
+fn test_final_part1_example() {
+    let sum = add_snail_numbers([
+	"[[[0,[5,8]],[[1,7],[9,6]]],[[4,[1,2]],[[1,4],2]]]",
+	"[[[5,[2,8]],4],[5,[[9,9],0]]]",
+	"[6,[[[6,2],[5,6]],[[7,6],[4,7]]]]",
+	"[[[6,[0,7]],[0,9]],[4,[9,[9,0]]]]",
+	"[[[7,[6,4]],[3,[1,3]]],[[[5,5],1],9]]",
+	"[[6,[[7,3],[3,2]]],[[[3,8],[5,7]],4]]",
+	"[[[[5,4],[7,7]],8],[[8,3],8]]",
+	"[[9,3],[[9,9],[6,[4,9]]]]",
+	"[[2,[[7,7],7]],[[5,8],[[9,3],[0,2]]]]",
+	"[[[[5,2],5],[8,[3,7]]],[[5,[7,5]],[4,4]]]"]);
+    assert_eq!(sum, SnailNum::from("[[[[6,6],[7,6]],[[7,7],[7,0]]],[[[7,7],[7,7]],[[7,8],[9,9]]]]"));
+    assert_eq!(magnitude(sum), 4140);
+}
+
+fn part1(nums: &[SnailNum]) {
+    println!("Day 18 part 1: {}", magnitude(add_snail_numbers(nums.iter().map(|n| n.to_owned()))));
 }
 
 fn run() -> Result<(), String> {
