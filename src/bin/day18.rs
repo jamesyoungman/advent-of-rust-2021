@@ -25,8 +25,8 @@ fn parse_snail_number(s: &str) -> Result<SnailNum, String> {
 }
 
 fn find_explode_point(n: &SnailNum) -> Option<(usize, usize)> {
-    const EXPLODE_DEPTH: usize = 5;
-    let mut depth: usize = 0;
+    const EXPLODE_DEPTH: i32 = 4;
+    let mut depth: i32 = -1;
     let mut explode_start: Option<usize> = None;
     for (pos, ch) in n.0.chars().enumerate() {
         //println!("find_explode_point: at {}, depth={}, explode_start={:?}, ch={}",
@@ -48,15 +48,14 @@ fn find_explode_point(n: &SnailNum) -> Option<(usize, usize)> {
                 if let Some(start) = explode_start {
                     return Some((start, pos));
                 } else {
-                    depth = match depth.checked_sub(1) {
-                        None => {
-                            panic!("number has more ']' than '['");
-                        }
-                        Some(d) => d,
-                    }
+                    depth = depth - 1;
+		    if depth < -1 {
+			panic!("number has more ']' than '['");
+		    }
                 }
             }
             d if d.is_ascii_digit() => {
+		assert!(depth >= 0);
                 if depth == EXPLODE_DEPTH && explode_start.is_none() {
                     explode_start = Some(pos);
                 }
@@ -90,7 +89,12 @@ fn test_find_explode_point() {
 fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
     match to_add.parse::<i32>() {
         Ok(to_add) => match s.parse::<i32>() {
-            Ok(n) => (n + to_add).to_string(),
+            Ok(n) => {
+		let result = (n + to_add).to_string();
+		println!("add_stringly_typed_number: {} + {} -> {}",
+			n, to_add, result);
+		result
+	    }
             Err(e) => {
                 panic!("'{}' is not a number: {}", s, e);
             }
@@ -102,14 +106,17 @@ fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
 }
 
 fn explode_lhs(s: &str, left_number: &str) -> String {
-    let rx = Regex::new(r"^(.*)(\d+)(\D*)").unwrap();
+    println!("explode_lhs:  input={}", s);
+    let rx = Regex::new(r"^(.*\D)(\d+)(\D*)").unwrap();
     let add = |caps: &Captures| -> String {
-        format!(
-            "{}{}{}",
-            &caps[1],
-            &add_stringly_typed_number(&caps[2], left_number),
-            &caps[3]
-        )
+	let left = &caps[1];
+	let middle = add_stringly_typed_number(&caps[2], left_number);
+	let right = &caps[3];
+	println!("explode_lhs:   left={}", left);
+	println!("explode_lhs:caps[2]={}", &caps[2]);
+	println!("explode_lhs: middle={}", middle);
+	println!("explode_lhs:  right={}", right);
+        format!("{}{}{}", left, middle, right)
     };
     rx.replace(s, add).to_string()
 }
@@ -155,7 +162,7 @@ fn explode(n: SnailNum) -> (SnailNum, bool) {
             //println!("end is {}", end);
             match n.0.get(begin..end) {
                 Some(s) => {
-                    println!("  exploding pair {}", s);
+                    println!("    exploding pair {}", s);
                     let (left_number, right_number) = extract_pair(s);
                     let lhs = n.0.get(0..begin).unwrap();
                     let rhs = n.0.get(end..).unwrap();
@@ -164,7 +171,7 @@ fn explode(n: SnailNum) -> (SnailNum, bool) {
                         explode_lhs(lhs, &left_number),
                         explode_rhs(rhs, &right_number)
                     );
-                    println!("  exploding {} to produce {}", &n, &output);
+                    println!("    exploding {}\n    result is {}", &n, &output);
                     (SnailNum(output), true)
                 }
                 None => {
@@ -205,7 +212,7 @@ fn test_explode() {
 }
 
 fn split(n: SnailNum) -> (SnailNum, bool) {
-    let rx = Regex::new(r"^(.*\D)(\d\d+)(\D.*)$").unwrap();
+    let rx = Regex::new(r"^(.*?\D)(\d\d+)(\D.*)$").unwrap();
     match rx.captures(&n.0) {
         None => (n, false),
         Some(caps) => match caps[2].parse::<i32>() {
@@ -213,7 +220,7 @@ fn split(n: SnailNum) -> (SnailNum, bool) {
                 let left = big / 2;
                 let right = left + big % 2;
                 let newval: String = format!("{}[{},{}]{}", &caps[1], left, right, &caps[3]);
-                println!("  splitting {} to produce {}", &n, &newval);
+                println!("    splitting {}\n    result is {}", &n, &newval);
                 (SnailNum::from(newval.as_str()), true)
             }
             Err(e) => {
@@ -237,12 +244,22 @@ fn test_split() {
         split(SnailNum::from("[12,6]")),
         (SnailNum::from("[[6,6],6]"), true)
     );
-    //assert_eq!(split(SnailNum::from("[101,6]")), (SnailNum::from("[[50,51],6]"), true));
+    // Verify that we pass through stuff on the left that doesn't need
+    // splitting.
+    assert_eq!(
+        split(SnailNum::from("[[1,2],[10,6]]")),
+        (SnailNum::from("[[1,2],[[5,5],6]]"), true)
+    );
+    // Verify that we always split the leftmost number.
+    assert_eq!(
+        split(SnailNum::from("[12,16]")),
+        (SnailNum::from("[[6,6],16]"), true)
+    );
 }
 
 fn reduce(mut n: SnailNum) -> SnailNum {
     loop {
-        println!("reducing {}", &n);
+        println!("  reducing {}", &n);
         let (exploded_number, did_explode) = explode(n);
         n = exploded_number;
         if !did_explode {
@@ -265,7 +282,9 @@ fn test_reduce() {
 }
 
 fn add(left: SnailNum, right: SnailNum) -> SnailNum {
-    reduce(SnailNum::from(format!("[{},{}]", left, right).as_str()))
+    let tmp = format!("[{},{}]", left, right);
+    println!("adding {} to {} by reducing {}", &left.0, &right.0, &tmp);
+    reduce(SnailNum::from(tmp.as_str()))
 }
 
 #[test]
@@ -287,6 +306,27 @@ fn test_add_larger_example() {
         ),
         SnailNum::from("[[[[4,0],[5,4]],[[7,7],[6,0]]],[[8,[7,7]],[[7,9],[5,0]]]]")
     );
+}
+
+#[test]
+fn test_add_larger_example_failing_step_a() {
+    // This test is takng from the falling step within the calculation
+    // for test_add_larger_example.
+    assert_eq!(
+	add(
+	    SnailNum::from("[[[[6,6],[6,6]],[[6,0],[6,7]]],[[[7,7],[8,9]],[8,[8,1]]]]"),
+	    SnailNum::from("[2,9]")
+	),
+	SnailNum::from("[[[[6,6],[7,7]],[[0,7],[7,7]]],[[[5,5],[5,6]],9]]"));
+}
+
+#[test]
+fn test_add_larger_example_failing_step_b() {
+    // This test is takng from the falling step within the calculation
+    // for test_add_larger_example.
+    assert_eq!(
+	explode(SnailNum::from("[[[[12,12],[6,14]],[[15,0],[17,[8,1]]]],[2,9]]")),
+	(SnailNum::from("[[[[12,12],[6,14]],[[15,0],[25,0]]],[3,9]]"), true));
 }
 
 fn add_snail_numbers<I, S>(items: I) -> SnailNum
@@ -324,20 +364,20 @@ fn test_add_snail_numbers_sample() {
     );
 }
 
-//#[test]
-//fn test_add_snail_numbers_large_example() {
-//    assert_eq!(add_snail_numbers(["[[[0,[4,5]],[0,0]],[[[4,5],[2,6]],[9,5]]]",
-//				  "[7,[[[3,7],[4,3]],[[6,3],[8,8]]]]",
-//				  "[[2,[[0,8],[3,4]]],[[[6,7],1],[7,[1,6]]]]",
-//				  "[[[[2,4],7],[6,[0,5]]],[[[6,8],[2,8]],[[2,1],[4,5]]]]",
-//				  "[7,[5,[[3,8],[1,4]]]]",
-//				  "[[2,[2,2]],[8,[8,1]]]",
-//				  "[2,9]",
-//				  "[1,[[[9,3],9],[[9,0],[0,7]]]]",
-//				  "[[[5,[7,4]],7],1]",
-//				  "[[[[4,2],2],6],[8,7]]"]),
-//	       SnailNum::from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]"));
-//}
+#[test]
+fn test_add_snail_numbers_large_example() {
+    assert_eq!(add_snail_numbers(["[[[0,[4,5]],[0,0]],[[[4,5],[2,6]],[9,5]]]",
+				  "[7,[[[3,7],[4,3]],[[6,3],[8,8]]]]",
+				  "[[2,[[0,8],[3,4]]],[[[6,7],1],[7,[1,6]]]]",
+				  "[[[[2,4],7],[6,[0,5]]],[[[6,8],[2,8]],[[2,1],[4,5]]]]",
+				  "[7,[5,[[3,8],[1,4]]]]",
+				  "[[2,[2,2]],[8,[8,1]]]",
+				  "[2,9]",
+				  "[1,[[[9,3],9],[[9,0],[0,7]]]]",
+				  "[[[5,[7,4]],7],1]",
+				  "[[[[4,2],2],6],[8,7]]"]),
+	       SnailNum::from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]"));
+}
 
 #[test]
 fn test_display_roundtrips() {
