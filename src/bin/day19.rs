@@ -1,3 +1,4 @@
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -5,9 +6,11 @@ use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::io::prelude::*;
 use std::num::ParseIntError;
+use std::ops::Sub;
 use std::str::FromStr;
 
 use ndarray::prelude::*;
+use ndarray::Zip;
 use regex::Regex;
 use tracing_subscriber::prelude::*;
 
@@ -156,7 +159,10 @@ const SAMPLE: &[&str] = &[
 /// rotations are 0 degrees, 90 degrees, 180 degrees or 270 degrees.
 #[derive(Debug, PartialEq, Eq)]
 struct Transform {
-    matrix: Array2<i32>,	// column-major order.
+    matrix: Array2<i32>, // column-major order.
+
+    rotation: [u8; 3],
+    translation: [i32; 3],
 }
 
 #[derive(Debug)]
@@ -177,54 +183,75 @@ impl Transform {
     const VALID_ROTATIONS: [u8; 4] = [0, 1, 2, 3];
 
     fn c_and_s(r: u8) -> Result<(i32, i32), BadTransform> {
-	match r {
-	    0 => Ok((1, 0)), // 0 degrees
-	    1 => Ok((0, 1)), // 90 degrees
-	    2 => Ok((-1, 0)), // 180 degrees
-	    3 => Ok((0, -1)), // 270 degrees
-	    _ => Err(BadTransform(format!("rotation values should be 0,1,2,3: {}", r))),
-	}
+        match r {
+            0 => Ok((1, 0)),  // 0 degrees
+            1 => Ok((0, 1)),  // 90 degrees
+            2 => Ok((-1, 0)), // 180 degrees
+            3 => Ok((0, -1)), // 270 degrees
+            _ => Err(BadTransform(format!(
+                "rotation values should be 0,1,2,3: {}",
+                r
+            ))),
+        }
     }
 
     fn try_from_rotations_translations(
-	rotate: &[u8; 3],
-	translate: &[i32; 3],
+        rotate: &[u8; 3],
+        translate: &[i32; 3],
     ) -> Result<Transform, BadTransform> {
-	// Using the mnemonics from
-	// https://www.euclideanspace.com/maths/algebra/matrix/transforms/examples/index.htm
-	let (cb, sb) = Transform::c_and_s(rotate[0])?;
-	let (ch, sh) = Transform::c_and_s(rotate[1])?;
-	let (ca, sa) = Transform::c_and_s(rotate[2])?;
+        // Using the mnemonics from
+        // https://www.euclideanspace.com/maths/algebra/matrix/transforms/examples/index.htm
+        let (cb, sb) = Transform::c_and_s(rotate[0])?;
+        let (ch, sh) = Transform::c_and_s(rotate[1])?;
+        let (ca, sa) = Transform::c_and_s(rotate[2])?;
 
-	// The top-left portion of the transformation matrix is a 3x3
-	// submatrix representing the rotation.  The right column
-	// represents the translation and the bottom row is fixed.
-	let matrix = array![
-	    [ ch*ca, -ch*sa*cb+sh*sb,  ch*sa*sb+sh*cb, translate[0]],
-	    [    sa,           ca*cb,          -ca*sb, translate[1]],
-	    [-sh*ca,  sh*sa*cb+ch*sb, -sh*sa*sb+ch*cb, translate[2]],
-	    [     0,               0,               0,            1]
-	];
-	Ok(Transform {
-	    matrix,
-	})
+        // The top-left portion of the transformation matrix is a 3x3
+        // submatrix representing the rotation.  The right column
+        // represents the translation and the bottom row is fixed.
+        let matrix = array![
+            [
+                ch * ca,
+                -ch * sa * cb + sh * sb,
+                ch * sa * sb + sh * cb,
+                translate[0]
+            ],
+            [sa, ca * cb, -ca * sb, translate[1]],
+            [
+                -sh * ca,
+                sh * sa * cb + ch * sb,
+                -sh * sa * sb + ch * cb,
+                translate[2]
+            ],
+            [0, 0, 0, 1]
+        ];
+        Ok(Transform {
+            matrix,
+            rotation: rotate.to_owned(),
+            translation: translate.to_owned(),
+        })
+    }
+
+    fn rotation(&self) -> &[u8; 3] {
+        &self.rotation
     }
 
     fn try_from_rotations(rotate: &[u8; 3]) -> Result<Transform, BadTransform> {
-	Self::try_from_rotations_translations(rotate, &[0, 0, 0])
+        Self::try_from_rotations_translations(rotate, &[0, 0, 0])
     }
 
     fn all_rotations() -> Vec<Transform> {
-	let mut result = Vec::new();
-	for rx in Self::VALID_ROTATIONS {
-	    for ry in Self::VALID_ROTATIONS {
-		for rz in Self::VALID_ROTATIONS {
-		    result.push(Transform::try_from_rotations(&[rx, ry, rz])
-				.expect("VALID_ROTATIONS should be valid"));
-		}
-	    }
-	}
-	result
+        let mut result = Vec::new();
+        for rx in Self::VALID_ROTATIONS {
+            for ry in Self::VALID_ROTATIONS {
+                for rz in Self::VALID_ROTATIONS {
+                    result.push(
+                        Transform::try_from_rotations(&[rx, ry, rz])
+                            .expect("VALID_ROTATIONS should be valid"),
+                    );
+                }
+            }
+        }
+        result
     }
 }
 
@@ -236,46 +263,48 @@ struct TransformBuilder {
 
 impl TransformBuilder {
     fn new() -> TransformBuilder {
-	TransformBuilder {
-	    rotations: None,
-	    translations: None,
-	}
+        TransformBuilder {
+            rotations: None,
+            translations: None,
+        }
     }
 
     fn translate(&mut self, amounts: [i32; 3]) {
-	self.translations = Some(amounts)
+        self.translations = Some(amounts)
     }
 
     fn rotate(&mut self, amounts: [u8; 3]) -> Result<(), BadTransform> {
-	if let Some(e) = amounts.iter()
-	    .filter_map(|r| Transform::c_and_s(*r).err())
-	    .next() {
-		Err(e)
-	    } else {
-		self.rotations = Some(amounts);
-		Ok(())
-	    }
+        if let Some(e) = amounts
+            .iter()
+            .filter_map(|r| Transform::c_and_s(*r).err())
+            .next()
+        {
+            Err(e)
+        } else {
+            self.rotations = Some(amounts);
+            Ok(())
+        }
     }
 
     fn build(&self) -> Transform {
-	const NO_ROTATIONS: [u8; 3] = [0, 0, 0];
-	const NO_TRANSLATIONS: [i32; 3] = [0, 0, 0];
-	let rotations: &[u8; 3] = self.rotations.as_ref().unwrap_or(&NO_ROTATIONS);
-	let translations: &[i32; 3] = self.translations.as_ref().unwrap_or(&NO_TRANSLATIONS);
-	match Transform::try_from_rotations_translations(rotations, translations) {
-	    Ok(t) => t,
-	    Err(e) => {
-		panic!(
+        const NO_ROTATIONS: [u8; 3] = [0, 0, 0];
+        const NO_TRANSLATIONS: [i32; 3] = [0, 0, 0];
+        let rotations: &[u8; 3] = self.rotations.as_ref().unwrap_or(&NO_ROTATIONS);
+        let translations: &[i32; 3] = self.translations.as_ref().unwrap_or(&NO_TRANSLATIONS);
+        match Transform::try_from_rotations_translations(rotations, translations) {
+            Ok(t) => t,
+            Err(e) => {
+                panic!(
 		    "unexpected error '{}' should have been prevented by TransformBuilder::rotate()",
 		    e);
-	    }
-	}
+            }
+        }
     }
 }
 
 impl Display for BadTransform {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-	self.0.fmt(f)
+        self.0.fmt(f)
     }
 }
 
@@ -283,9 +312,7 @@ impl Error for BadTransform {}
 
 impl Default for Transform {
     fn default() -> Transform {
-	Transform {
-	    matrix: Array2::zeros((4,4)),
-	}
+        Transform::try_from_rotations_translations(&[0, 0, 0], &[0, 0, 0]).unwrap()
     }
 }
 
@@ -294,40 +321,36 @@ impl Default for Transform {
 /// it by multiplication with a 4x4 matrix.  See explanation at
 /// https://www.euclideanspace.com/maths/geometry/affine/matrix4x4/index.htm
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct Point {
+pub struct Point {
     // coorrdinates is a column vector.  It has shape (1, 4).
     coordinates: Array2<i32>,
 }
 
 impl From<[i32; 3]> for Point {
     fn from(v: [i32; 3]) -> Point {
-	let coordinates = array![
-	    v[0], v[1], v[2], 1
-	].insert_axis(Axis(1));
-	Point {
-	    coordinates,
-	}
+        let coordinates = array![v[0], v[1], v[2], 1].insert_axis(Axis(1));
+        Point { coordinates }
     }
 }
 
 #[test]
 fn test_point_from() {
     let p = Point::from([6, 7, 8]);
-    assert_eq!(p.coordinates[(0,0)], 6);
-    assert_eq!(p.coordinates[(1,0)], 7);
-    assert_eq!(p.coordinates[(2,0)], 8);
-    assert_eq!(p.coordinates[(3,0)], 1); // fixed
+    assert_eq!(p.coordinates[(0, 0)], 6);
+    assert_eq!(p.coordinates[(1, 0)], 7);
+    assert_eq!(p.coordinates[(2, 0)], 8);
+    assert_eq!(p.coordinates[(3, 0)], 1); // fixed
 }
 
 impl Display for Point {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-	for (i, n) in self.coordinates.iter().take(3).enumerate() {
-	    if i > 0 {
-		f.write_str(",")?;
-	    }
-	    write!(f, "{}", n)?;
-	}
-	Ok(())
+        for (i, n) in self.coordinates.iter().take(3).enumerate() {
+            if i > 0 {
+                f.write_str(",")?;
+            }
+            write!(f, "{}", n)?;
+        }
+        Ok(())
     }
 }
 
@@ -339,45 +362,105 @@ fn test_point_display() {
 
 impl Point {
     fn transform(&self, t: &Transform) -> Point {
-	println!("{} * {} =", t.matrix, self.coordinates);
-	let product: Array2<i32> = t.matrix.dot(&self.coordinates);
-	println!("{}", product);
-	Point {
-	    coordinates: product,
-	}
+        //println!("{} * {} =", t.matrix, self.coordinates);
+        let product: Array2<i32> = t.matrix.dot(&self.coordinates);
+        //println!("{}", product);
+        Point {
+            coordinates: product,
+        }
     }
 
     fn xyz(&self) -> Array1<i32> {
-	let slice = s![0..3, 0..1]; // drops the extra `1`.
-	self.coordinates.slice(slice).index_axis(Axis(1), 0).to_owned()
+        let slice = s![0..3, 0..1]; // drops the extra `1`.
+        self.coordinates
+            .slice(slice)
+            .index_axis(Axis(1), 0)
+            .to_owned()
+    }
+}
+
+impl Sub for &Point {
+    type Output = Array2<i32>;
+    fn sub(self, other: Self) -> Array2<i32> {
+        &self.coordinates - &other.coordinates
+    }
+}
+
+impl Sub for Point {
+    type Output = Array2<i32>;
+    fn sub(self, other: Self) -> Array2<i32> {
+        (&self).sub(&other)
+    }
+}
+
+#[derive(Debug)]
+pub struct AxisAlignedBoundingBox {
+    pub min: Point,
+    pub max: Point,
+}
+
+impl AxisAlignedBoundingBox {
+    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
+        AxisAlignedBoundingBox { min, max }
+    }
+
+    fn insert(&mut self, p: &Point) {
+        Zip::from(&mut self.min.coordinates)
+            .and(&p.coordinates)
+            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
+        Zip::from(&mut self.max.coordinates)
+            .and(&p.coordinates)
+            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
+    }
+
+    fn transform(&self, t: &Transform) -> AxisAlignedBoundingBox {
+        let tmin = self.min.transform(t);
+        let mut result = AxisAlignedBoundingBox {
+            min: tmin.clone(),
+            max: tmin.clone(),
+        };
+        result.insert(&self.max.transform(t));
+        result
+    }
+}
+
+fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
+where
+    I: IntoIterator<Item = &'a Point>,
+{
+    let mut it = input.into_iter();
+    let p = it.next()?;
+    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
+    for item in it {
+        bb.insert(&item);
+    }
+    Some(bb)
+}
+
+impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
+    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
+    where
+        I: IntoIterator<Item = &'a Point>,
+    {
+        aabb_of_points(items)
     }
 }
 
 #[test]
 fn test_example() {
-    let m = array![
-	[1, 0, 0, 0],
-	[0, 1, 0, 0],
-	[0, 0, 1, 0],
-	[0, 0, 0, 1]];
-    let v1 = array![
-	[4],
-	[5],
-	[6],
-	[1]];
+    let m = array![[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+    let v1 = array![[4], [5], [6], [1]];
     let product1 = m.dot(&v1);
     println!("{} *\n{} =\n{}\n", m, v1, product1);
     let v2 = array![4, 5, 6, 1];
     let product2 = m.dot(&v2);
     println!("{} *\n{} =\n{}\n", m, v2, product2);
 
-    assert_eq!(product1[(0,0)], 4);
-    assert_eq!(product1[(1,0)], 5);
-    assert_eq!(product1[(2,0)], 6);
-    assert_eq!(product1[(3,0)], 1);
+    assert_eq!(product1[(0, 0)], 4);
+    assert_eq!(product1[(1, 0)], 5);
+    assert_eq!(product1[(2, 0)], 6);
+    assert_eq!(product1[(3, 0)], 1);
 }
-
-
 
 #[test]
 fn test_point_transform() {
@@ -385,24 +468,22 @@ fn test_point_transform() {
     let expected = Point::from([2, -1, 3]);
     let mut found: bool = false;
     for rx in 0..3 {
-	for ry in 0..3 {
-	    for rz in 0..3 {
-		let t = Transform::try_from_rotations(&[rx, ry, rz])
-		    .expect("test case should be valid");
-		let p2 = p.transform(&t);
-		println!("{}\n", &p2);
-		if p2 == expected {
-		    found = true;
-		}
-		println!("found={}\n", &found);
-	    }
-	}
+        for ry in 0..3 {
+            for rz in 0..3 {
+                let t = Transform::try_from_rotations(&[rx, ry, rz])
+                    .expect("test case should be valid");
+                let p2 = p.transform(&t);
+                if p2 == expected {
+                    found = true;
+                }
+            }
+        }
     }
     assert!(found);
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum PointConversionError {
+pub enum PointConversionError {
     Int(String, ParseIntError),
     Fmt(String, String),
 }
@@ -425,33 +506,30 @@ impl Error for PointConversionError {}
 impl FromStr for Point {
     type Err = PointConversionError;
     fn from_str(s: &str) -> Result<Point, PointConversionError> {
-        let mut values: Vec<Result<i32, ParseIntError>> = s.split(',')
-	    .map(|s| s.parse())
-	    .collect();
+        let mut values: Vec<Result<i32, ParseIntError>> = s.split(',').map(|s| s.parse()).collect();
         let first_err: Option<&ParseIntError> = values
             .iter()
             .filter_map(|x: &Result<_, ParseIntError>| -> Option<&ParseIntError> {
                 x.as_ref().err()
             })
-                    .next();
+            .next();
         match (first_err, values.len()) {
             (None, 3) => {
-		let getval = |r: &Result<i32, ParseIntError>| -> i32 {
-		    *r.as_ref().unwrap()
-		};
-		values.push(Ok(1));
-		Ok(Point {
-                    coordinates: Array::from_iter(
-			values.iter()
-			    .map(getval))
-			.insert_axis(Axis(1)),
-		})
-	    }
-	    (Some(e), _) => Err(PointConversionError::Int(s.to_string(), e.clone())),
-	    (None, n) if n > 3 => Err(PointConversionError::Fmt(
-		s.to_string(), "too many ','".to_string())),
+                let getval = |r: &Result<i32, ParseIntError>| -> i32 { *r.as_ref().unwrap() };
+                values.push(Ok(1));
+                Ok(Point {
+                    coordinates: Array::from_iter(values.iter().map(getval)).insert_axis(Axis(1)),
+                })
+            }
+            (Some(e), _) => Err(PointConversionError::Int(s.to_string(), e.clone())),
+            (None, n) if n > 3 => Err(PointConversionError::Fmt(
+                s.to_string(),
+                "too many ','".to_string(),
+            )),
             (None, _) => Err(PointConversionError::Fmt(
-		s.to_string(), "not enough ','".to_string())),
+                s.to_string(),
+                "not enough ','".to_string(),
+            )),
         }
     }
 }
@@ -465,18 +543,9 @@ impl TryFrom<&str> for Point {
 
 #[test]
 fn test_parse_point() {
-    assert_eq!(
-        Ok(Point::from([1, 2, 3])),
-        Point::from_str("1,2,3")
-    );
-    assert_eq!(
-        Ok(Point::from([1, 2, 3])),
-        Point::try_from("1,2,3")
-    );
-    assert_eq!(
-        Ok(Point::from([1, -2, 3])),
-        Point::try_from("1,-2,3")
-    );
+    assert_eq!(Ok(Point::from([1, 2, 3])), Point::from_str("1,2,3"));
+    assert_eq!(Ok(Point::from([1, 2, 3])), Point::try_from("1,2,3"));
+    assert_eq!(Ok(Point::from([1, -2, 3])), Point::try_from("1,-2,3"));
 
     assert!(Point::from_str("1,2,").is_err()); // missing value
     assert!(Point::from_str("1,2").is_err()); // missing field
@@ -496,14 +565,96 @@ fn test_point_xyz() {
 
 struct ScannerReport {
     points: HashSet<Point>,
+    bb: Option<AxisAlignedBoundingBox>,
 }
 
+impl From<HashSet<Point>> for ScannerReport {
+    fn from(points: HashSet<Point>) -> ScannerReport {
+        let bb: Option<AxisAlignedBoundingBox> = aabb_of_points(points.iter());
+        ScannerReport { points, bb }
+    }
+}
 
 impl ScannerReport {
-    fn compute_overlaps(&self, other: &ScannerReport) -> Vec<(Transform, HashSet<Point>)> {
-	vec![
-	    (Transform::default(), HashSet::new())
-	]
+    fn transform(&self, t: &Transform) -> HashSet<Point> {
+        self.points
+            .iter()
+            .fold(HashSet::new(), |mut points, point| {
+                points.insert(point.transform(t));
+                points
+            })
+    }
+
+    fn bounding_box(&self) -> Option<&AxisAlignedBoundingBox> {
+        self.bb.as_ref()
+    }
+
+    fn compute_overlaps(
+        &self,
+        other: &ScannerReport,
+        min_size: usize,
+    ) -> Vec<(Transform, HashSet<Point>)> {
+        let mut result = Vec::new();
+        let my_bb = match self.bounding_box() {
+            None => {
+                // No points in this scanner report, so cannot overlap
+                // with anything.
+                return Vec::new();
+            }
+            Some(bb) => bb,
+        };
+        dbg!(&my_bb);
+
+        for transform in Transform::all_rotations() {
+            //for transform in [Transform::try_from_rotations(&[1, 0, 0]).unwrap()] {
+            match other
+                .bounding_box()
+                .map(|bounds| bounds.transform(&transform))
+            {
+                None => {
+                    continue; // no points in the other scanner report.
+                }
+                Some(bb) => {
+                    dbg!(&bb);
+                    let slice = s![0..3, 0..1]; // drops the extra `1`.
+                    let diff: Array1<i32> = (&my_bb.min - &bb.min)
+                        .slice(slice)
+                        .index_axis(Axis(1), 0)
+                        .to_owned();
+                    println!("compute_overlaps: diff={:?}", &diff);
+                    let translation: [i32; 3] = [diff[0], diff[1], diff[2]];
+                    let rotate_and_translate = match Transform::try_from_rotations_translations(
+                        transform.rotation(),
+                        &translation,
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            panic!(
+                                "Transform::all_rotations() returned an invalid rotation ({})",
+                                e
+                            );
+                        }
+                    };
+                    dbg!(bb.transform(&rotate_and_translate));
+
+                    let other_points: HashSet<Point> = other.transform(&rotate_and_translate);
+                    dbg!(&other_points);
+                    let intersection: HashSet<Point> =
+                        self.points.intersection(&other_points).cloned().collect();
+                    dbg!(&intersection);
+                    if intersection.len() >= min_size {
+                        result.push((rotate_and_translate, intersection));
+                    } else {
+                        println!(
+                            "Dropping intersection since overlap is too small ({} < {})",
+                            intersection.len(),
+                            min_size
+                        );
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
@@ -511,34 +662,48 @@ fn get_sample_scanner_reports() -> HashMap<i32, ScannerReport> {
     parse_input(SAMPLE).expect("valid sample input")
 }
 
-
 #[test]
-fn test_computer_overlaps() {
-    let sample = get_sample_scanner_reports();
-    let report0 = sample.get(&0).expect("test input should have scanner 0");
-    let report1 = sample.get(&1).expect("test input should have scanner 1");
-    let overlaps = report0.compute_overlaps(&report1);
-    match overlaps.as_slice() {
-	[(_t, points)] => {
-	    assert_eq!(points.len(), 12);
-	}
-	[] => {
-	    panic!("expected one overlap, got none");
-	}
-	_ => {
-	    panic!("expected one overlap, got {}", overlaps.len());
-	}
+fn test_compute_overlaps_trivial() {
+    let report = parse_input(&[
+        "--- scanner 0 ---",
+        "1,2,3",
+        "--- scanner 1 ---",
+        "1,2,3", // same points as scanner 0
+    ])
+    .expect("valid test data");
+    let overlaps = report[&0].compute_overlaps(&report[&1], 1);
+    assert!(overlaps.len() >= 1);
+    for (_t, points) in overlaps.iter() {
+        assert_eq!(points, &report[&0].points);
+        assert_eq!(points, &report[&1].points);
     }
 }
 
-
+#[test]
+fn test_compute_overlaps() {
+    let sample = get_sample_scanner_reports();
+    let report0 = sample.get(&0).expect("test input should have scanner 0");
+    let report1 = sample.get(&1).expect("test input should have scanner 1");
+    let overlaps = report0.compute_overlaps(&report1, 12);
+    match overlaps.as_slice() {
+        [(_t, points)] => {
+            assert!(points.len() >= 12);
+        }
+        [] => {
+            panic!("expected one overlap, got none");
+        }
+        _ => {
+            panic!("expected one overlap, got {}", overlaps.len());
+        }
+    }
+}
 
 #[derive(Debug)]
 struct BadInput(String);
 
 impl Display for BadInput {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-	self.0.fmt(f)
+        self.0.fmt(f)
     }
 }
 
@@ -548,17 +713,16 @@ fn add_scanner_report(
     result: &mut HashMap<i32, ScannerReport>,
 ) -> Result<(), BadInput> {
     match (current_scanner_id.as_mut(), current_points.is_empty()) {
-	(None, true) => Ok(()),	// nothing to do
-	(None, false) => Err(BadInput(
-	    "saw line containing a point before any scanner id header".to_string())),
-	(Some(id), _) => {
-	    result.insert(*id, ScannerReport {
-		points: current_points.clone(),
-	    });
-	    *current_scanner_id = None;
-	    current_points.clear();
-	    Ok(())
-	}
+        (None, true) => Ok(()), // nothing to do
+        (None, false) => Err(BadInput(
+            "saw line containing a point before any scanner id header".to_string(),
+        )),
+        (Some(id), _) => {
+            result.insert(*id, ScannerReport::from(current_points.clone()));
+            *current_scanner_id = None;
+            current_points.clear();
+            Ok(())
+        }
     }
 }
 
@@ -570,52 +734,46 @@ fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> 
     let sep_re = Regex::new(SEP_PATTERN).unwrap();
 
     for line in lines {
-	if line.is_empty() {
-	    continue;
-	} else if let Some(cap) = sep_re.captures(line) {
-	    if let Some(id_string) = cap.get(1) {
-		match id_string.as_str().parse() {
-		    Ok(n) => {
-			add_scanner_report(
-			    &mut current_scanner_id,
-			    &mut current_points,
-			    &mut result
-			)?;
-			current_scanner_id = Some(n);
-			continue;
-		    }
-		    Err(e) => {
-			return Err(BadInput(format!(
-			    "non-decimal scanner id in line '{}': {}",
-			    line,
-			    e,
-			)));
-		    }
-		}
-	    } else {
-		return Err(BadInput(format!(
-		    "regex '{}' should have captured an id from '{}'",
-		    SEP_PATTERN,
-		    line,
-		)));
-	    }
-	} else {
-	    match Point::from_str(line) {
-		Ok(point) => {
-		    current_points.insert(point);
-		}
-		Err(e) => {
-		    return Err(BadInput(format!("invalid point '{}': {}", line, e)));
-		}
-	    }
-	}
+        if line.is_empty() {
+            continue;
+        } else if let Some(cap) = sep_re.captures(line) {
+            if let Some(id_string) = cap.get(1) {
+                match id_string.as_str().parse() {
+                    Ok(n) => {
+                        add_scanner_report(
+                            &mut current_scanner_id,
+                            &mut current_points,
+                            &mut result,
+                        )?;
+                        current_scanner_id = Some(n);
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(BadInput(format!(
+                            "non-decimal scanner id in line '{}': {}",
+                            line, e,
+                        )));
+                    }
+                }
+            } else {
+                return Err(BadInput(format!(
+                    "regex '{}' should have captured an id from '{}'",
+                    SEP_PATTERN, line,
+                )));
+            }
+        } else {
+            match Point::from_str(line) {
+                Ok(point) => {
+                    current_points.insert(point);
+                }
+                Err(e) => {
+                    return Err(BadInput(format!("invalid point '{}': {}", line, e)));
+                }
+            }
+        }
     }
     if current_scanner_id.is_some() {
-	add_scanner_report(
-	    &mut current_scanner_id,
-	    &mut current_points,
-	    &mut result
-	)?;
+        add_scanner_report(&mut current_scanner_id, &mut current_points, &mut result)?;
     }
     Ok(result)
 }
@@ -749,11 +907,11 @@ fn run() -> Result<(), String> {
         .collect();
     let ls: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     match parse_input(&ls) {
-	Err(e) => Err(e.to_string()),
-	Ok(reports) => {
-	    part1(&reports);
-	    Ok(())
-	}
+        Err(e) => Err(e.to_string()),
+        Ok(reports) => {
+            part1(&reports);
+            Ok(())
+        }
     }
 }
 
