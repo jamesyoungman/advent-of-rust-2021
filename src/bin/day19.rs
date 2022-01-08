@@ -10,7 +10,6 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use ndarray::prelude::*;
-use ndarray::Zip;
 use regex::Regex;
 use tracing_subscriber::prelude::*;
 
@@ -154,11 +153,16 @@ const SAMPLE: &[&str] = &[
     "",
 ];
 
+trait Transform {
+    fn transform(&self, p: &Point) -> Point;
+    fn then(&self, t: &AffineTransform) -> TransformChain;
+}
+
 /// All rotation transforms are an integer number of 90-degree
 /// rotations about the origin (about some combination of axes).  All
 /// rotations are 0 degrees, 90 degrees, 180 degrees or 270 degrees.
-#[derive(Debug, PartialEq, Eq)]
-struct Transform {
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+struct AffineTransform {
     matrix: Array2<i32>, // column-major order.
 
     rotation: [u8; 3],
@@ -166,7 +170,7 @@ struct Transform {
 }
 
 #[derive(Debug)]
-struct BadTransform(String);
+struct BadAffineTransform(String);
 
 ///
 /// The transform matrix looks like this:
@@ -179,16 +183,17 @@ struct BadTransform(String);
 /// |      0 |     0 |     0 |     1 |
 ///
 /// For a pure rotation, t0==t1==t2==0.
-impl Transform {
-    const VALID_ROTATIONS: [u8; 4] = [0, 1, 2, 3];
+impl AffineTransform {
+    pub const ROTATION_MODULUS: u8 = 4;
+    pub const VALID_ROTATIONS: [u8; 4] = [0, 1, 2, 3];
 
-    fn c_and_s(r: u8) -> Result<(i32, i32), BadTransform> {
+    fn c_and_s(r: u8) -> Result<(i32, i32), BadAffineTransform> {
         match r {
             0 => Ok((1, 0)),  // 0 degrees
             1 => Ok((0, 1)),  // 90 degrees
             2 => Ok((-1, 0)), // 180 degrees
             3 => Ok((0, -1)), // 270 degrees
-            _ => Err(BadTransform(format!(
+            _ => Err(BadAffineTransform(format!(
                 "rotation values should be 0,1,2,3: {}",
                 r
             ))),
@@ -198,12 +203,12 @@ impl Transform {
     fn try_from_rotations_translations(
         rotate: &[u8; 3],
         translate: &[i32; 3],
-    ) -> Result<Transform, BadTransform> {
+    ) -> Result<AffineTransform, BadAffineTransform> {
         // Using the mnemonics from
         // https://www.euclideanspace.com/maths/algebra/matrix/transforms/examples/index.htm
-        let (cb, sb) = Transform::c_and_s(rotate[0])?;
-        let (ch, sh) = Transform::c_and_s(rotate[1])?;
-        let (ca, sa) = Transform::c_and_s(rotate[2])?;
+        let (cb, sb) = AffineTransform::c_and_s(rotate[0])?;
+        let (ch, sh) = AffineTransform::c_and_s(rotate[1])?;
+        let (ca, sa) = AffineTransform::c_and_s(rotate[2])?;
 
         // The top-left portion of the transformation matrix is a 3x3
         // submatrix representing the rotation.  The right column
@@ -224,7 +229,7 @@ impl Transform {
             ],
             [0, 0, 0, 1]
         ];
-        Ok(Transform {
+        Ok(AffineTransform {
             matrix,
             rotation: rotate.to_owned(),
             translation: translate.to_owned(),
@@ -235,17 +240,17 @@ impl Transform {
         &self.rotation
     }
 
-    fn try_from_rotations(rotate: &[u8; 3]) -> Result<Transform, BadTransform> {
+    fn try_from_rotations(rotate: &[u8; 3]) -> Result<AffineTransform, BadAffineTransform> {
         Self::try_from_rotations_translations(rotate, &[0, 0, 0])
     }
 
-    fn all_rotations() -> Vec<Transform> {
+    fn all_rotations() -> Vec<AffineTransform> {
         let mut result = Vec::new();
         for rx in Self::VALID_ROTATIONS {
             for ry in Self::VALID_ROTATIONS {
                 for rz in Self::VALID_ROTATIONS {
                     result.push(
-                        Transform::try_from_rotations(&[rx, ry, rz])
+                        AffineTransform::try_from_rotations(&[rx, ry, rz])
                             .expect("VALID_ROTATIONS should be valid"),
                     );
                 }
@@ -255,64 +260,90 @@ impl Transform {
     }
 }
 
+struct TransformChain {
+    transforms: Vec<AffineTransform>,
+}
+
+impl TransformChain {
+    fn empty() -> TransformChain {
+	TransformChain {
+	    transforms: Vec::new(),
+	}
+    }
+}
+
+impl Transform for TransformChain {
+    fn transform(&self, p: &Point) -> Point {
+	self.transforms.iter().fold(p.clone(), |p, t| t.transform(&p))
+    }
+    fn then(&self, t: &AffineTransform) -> TransformChain {
+	let mut transforms = self.transforms.clone();
+	transforms.push(t.clone());
+	TransformChain {
+	    transforms
+	}
+    }
+}
+
 #[derive(Debug)]
-struct TransformBuilder {
+struct AffineTransformBuilder {
     rotations: Option<[u8; 3]>,
     translations: Option<[i32; 3]>,
 }
 
-impl TransformBuilder {
-    fn new() -> TransformBuilder {
-        TransformBuilder {
+impl AffineTransformBuilder {
+    fn new() -> AffineTransformBuilder {
+        AffineTransformBuilder {
             rotations: None,
             translations: None,
         }
     }
 
-    fn translate(&mut self, amounts: [i32; 3]) {
-        self.translations = Some(amounts)
+    fn translate(mut self, amounts: [i32; 3]) -> Self {
+        self.translations = Some(amounts);
+	self
     }
 
-    fn rotate(&mut self, amounts: [u8; 3]) -> Result<(), BadTransform> {
+    fn rotate(mut self, amounts: &[u8; 3]) -> Result<Self, BadAffineTransform> {
         if let Some(e) = amounts
             .iter()
-            .filter_map(|r| Transform::c_and_s(*r).err())
+            .filter_map(|r| AffineTransform::c_and_s(*r).err())
             .next()
         {
             Err(e)
         } else {
-            self.rotations = Some(amounts);
-            Ok(())
+            self.rotations = Some(amounts.clone());
+            Ok(self)
         }
     }
 
-    fn build(&self) -> Transform {
+    fn build(&self) -> AffineTransform {
         const NO_ROTATIONS: [u8; 3] = [0, 0, 0];
         const NO_TRANSLATIONS: [i32; 3] = [0, 0, 0];
         let rotations: &[u8; 3] = self.rotations.as_ref().unwrap_or(&NO_ROTATIONS);
         let translations: &[i32; 3] = self.translations.as_ref().unwrap_or(&NO_TRANSLATIONS);
-        match Transform::try_from_rotations_translations(rotations, translations) {
+        match AffineTransform::try_from_rotations_translations(rotations, translations) {
             Ok(t) => t,
             Err(e) => {
                 panic!(
-		    "unexpected error '{}' should have been prevented by TransformBuilder::rotate()",
+		    "unexpected error '{}' should have been prevented by AffineTransformBuilder::rotate()",
 		    e);
             }
         }
     }
 }
 
-impl Display for BadTransform {
+impl Display for BadAffineTransform {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl Error for BadTransform {}
+impl Error for BadAffineTransform {}
 
-impl Default for Transform {
-    fn default() -> Transform {
-        Transform::try_from_rotations_translations(&[0, 0, 0], &[0, 0, 0]).unwrap()
+impl Default for AffineTransform {
+    fn default() -> AffineTransform {
+        AffineTransform::try_from_rotations_translations(&[0, 0, 0], &[0, 0, 0]).unwrap()
     }
 }
 
@@ -361,13 +392,12 @@ fn test_point_display() {
 }
 
 impl Point {
-    fn transform(&self, t: &Transform) -> Point {
-        //println!("{} * {} =", t.matrix, self.coordinates);
-        let product: Array2<i32> = t.matrix.dot(&self.coordinates);
-        //println!("{}", product);
-        Point {
-            coordinates: product,
-        }
+    fn translate(&self, translation: &Array2<i32>) -> Point {
+	let mut result = &self.coordinates + translation;
+	result[(3, 0)] = 1;
+	Point {
+	    coordinates: result
+	}
     }
 
     fn xyz(&self) -> Array1<i32> {
@@ -378,6 +408,31 @@ impl Point {
             .to_owned()
     }
 }
+
+impl Transform for AffineTransform {
+    fn transform(&self, p: &Point) -> Point {
+	Point {
+	    coordinates: self.matrix.dot(&p.coordinates),
+	}
+    }
+
+    /// This is probably unnecessary since we could compute a matrix
+    /// which combines two affine transformations.  But I don't want
+    /// to take the time right now to debug that.
+    fn then(&self, next: &AffineTransform) -> TransformChain {
+	TransformChain {
+	    transforms: vec![self.clone(), next.clone()],
+	}
+    }
+}
+
+#[test]
+fn test_translate() {
+    let origin = Point::from([0, 0, 0]);
+    let a = origin.translate(&array![0, 0, 0, 0].insert_axis(Axis(1)));
+    assert_eq!(a, origin);
+}
+
 
 impl Sub for &Point {
     type Output = Array2<i32>;
@@ -393,58 +448,58 @@ impl Sub for Point {
     }
 }
 
-#[derive(Debug)]
-pub struct AxisAlignedBoundingBox {
-    pub min: Point,
-    pub max: Point,
-}
-
-impl AxisAlignedBoundingBox {
-    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
-        AxisAlignedBoundingBox { min, max }
-    }
-
-    fn insert(&mut self, p: &Point) {
-        Zip::from(&mut self.min.coordinates)
-            .and(&p.coordinates)
-            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
-        Zip::from(&mut self.max.coordinates)
-            .and(&p.coordinates)
-            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
-    }
-
-    fn transform(&self, t: &Transform) -> AxisAlignedBoundingBox {
-        let tmin = self.min.transform(t);
-        let mut result = AxisAlignedBoundingBox {
-            min: tmin.clone(),
-            max: tmin.clone(),
-        };
-        result.insert(&self.max.transform(t));
-        result
-    }
-}
-
-fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
-where
-    I: IntoIterator<Item = &'a Point>,
-{
-    let mut it = input.into_iter();
-    let p = it.next()?;
-    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
-    for item in it {
-        bb.insert(&item);
-    }
-    Some(bb)
-}
-
-impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
-    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
-    where
-        I: IntoIterator<Item = &'a Point>,
-    {
-        aabb_of_points(items)
-    }
-}
+//#[derive(Debug)]
+//pub struct AxisAlignedBoundingBox {
+//    pub min: Point,
+//    pub max: Point,
+//}
+//
+//impl AxisAlignedBoundingBox {
+//    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
+//        AxisAlignedBoundingBox { min, max }
+//    }
+//
+//    fn insert(&mut self, p: &Point) {
+//        Zip::from(&mut self.min.coordinates)
+//            .and(&p.coordinates)
+//            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
+//        Zip::from(&mut self.max.coordinates)
+//            .and(&p.coordinates)
+//            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
+//    }
+//
+//    fn transform(&self, t: &AffineTransform) -> AxisAlignedBoundingBox {
+//        let tmin = self.min.transform(t);
+//        let mut result = AxisAlignedBoundingBox {
+//            min: tmin.clone(),
+//            max: tmin.clone(),
+//        };
+//        result.insert(&self.max.transform(t));
+//        result
+//    }
+//}
+//
+//fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
+//where
+//    I: IntoIterator<Item = &'a Point>,
+//{
+//    let mut it = input.into_iter();
+//    let p = it.next()?;
+//    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
+//    for item in it {
+//        bb.insert(&item);
+//    }
+//    Some(bb)
+//}
+//
+//impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
+//    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
+//    where
+//        I: IntoIterator<Item = &'a Point>,
+//    {
+//        aabb_of_points(items)
+//    }
+//}
 
 #[test]
 fn test_example() {
@@ -470,9 +525,9 @@ fn test_point_transform() {
     for rx in 0..3 {
         for ry in 0..3 {
             for rz in 0..3 {
-                let t = Transform::try_from_rotations(&[rx, ry, rz])
+                let t = AffineTransform::try_from_rotations(&[rx, ry, rz])
                     .expect("test case should be valid");
-                let p2 = p.transform(&t);
+                let p2 = t.transform(&p);
                 if p2 == expected {
                     found = true;
                 }
@@ -563,99 +618,308 @@ fn test_point_xyz() {
     assert_eq!(xyz[2], 6);
 }
 
+#[derive(Debug)]
 struct ScannerReport {
-    points: HashSet<Point>,
-    bb: Option<AxisAlignedBoundingBox>,
+    points: Vec<Point>,
+    //bb: Option<AxisAlignedBoundingBox>,
 }
 
-impl From<HashSet<Point>> for ScannerReport {
-    fn from(points: HashSet<Point>) -> ScannerReport {
-        let bb: Option<AxisAlignedBoundingBox> = aabb_of_points(points.iter());
-        ScannerReport { points, bb }
+impl From<&[Point]> for ScannerReport {
+    fn from(points: &[Point]) -> ScannerReport {
+        //let bb: Option<AxisAlignedBoundingBox> = aabb_of_points(points.iter());
+        ScannerReport {
+	    points: points.to_vec(),
+	    // bb
+	}
     }
+}
+
+#[inline]
+fn manhattan1(a: i32, b: i32) -> i64 {
+    (max(a, b) - min(a, b)).into()
+}
+
+fn manhattan3(a: &Array1<i32>, b: &Array1<i32>) -> i64 {
+    (0..3).map(|axis| manhattan1(a[axis], b[axis])).sum()
+}
+
+
+/// Find one or more transforms which transforms a into b.  In general
+/// there will be more than one.  For example, where both points are
+/// coincident at the origin, any rotation (or none) will do.
+fn find_rotation(
+    a: &Array2<i32>,
+    b: &Array2<i32>
+) -> Vec<AffineTransform> {
+    let mut result = Vec::new();
+    for t in AffineTransform::all_rotations() {
+	let rotated = t.matrix.dot(b);
+	if rotated == a {
+	    result.push(t);
+	}
+    }
+    result
+}
+
+fn compute_diff(a: &Point, b: &Point) -> Array2<i32> {
+    let mut result = (&a.coordinates - &b.coordinates).to_owned();
+    result[(3, 0)] = 1;
+    result
 }
 
 impl ScannerReport {
-    fn transform(&self, t: &Transform) -> HashSet<Point> {
-        self.points
-            .iter()
-            .fold(HashSet::new(), |mut points, point| {
-                points.insert(point.transform(t));
-                points
-            })
+    fn len(&self) -> usize {
+	self.points.len()
     }
 
-    fn bounding_box(&self) -> Option<&AxisAlignedBoundingBox> {
-        self.bb.as_ref()
+    fn transform(&self, t: &AffineTransform) -> Vec<Point> {
+        self.points
+            .iter()
+	    .map(|p| t.transform(p))
+	    .collect()
+    }
+
+    //fn bounding_box(&self) -> Option<&AxisAlignedBoundingBox> {
+    //    self.bb.as_ref()
+    //}
+
+    fn fingerprint_permutation(&self) -> Vec<(i64, usize, usize)> {
+        let slice = s![0..3, 0..1]; // drops the extra `1`.
+	let raw_values: Vec<Array1<i32>> = self.points.iter()
+	    .map(|point| point.coordinates.slice(slice).index_axis(Axis(1), 0).to_owned())
+	    .collect();
+	let mut distances: Vec<(i64, usize, usize)> = Vec::new();
+	for (i, a) in raw_values.iter().enumerate() {
+	    for j in 0..i {
+		let dist: i64 = manhattan3(a, &raw_values[j]);
+		distances.push((dist, i, j))
+	    }
+	}
+	distances.sort_unstable();
+	distances
+    }
+
+    /// Convert a rotation which we believe maps diffs between
+    /// locations in self and points into a full transform (rotation +
+    /// translation) which actually does.  Or, if we cannot find one,
+    /// return None.
+    ///
+    /// Because we accept a subset (of size >= `min_size`) of matching
+    /// points as being sufficient, more than one translation may be
+    /// accepted.  For example, if min_size is 1 and both sets of
+    /// points have 2 members, there are two possible translations
+    /// which map just one of the points onto another.
+    ///
+    /// The coordinates in `point` do not necessarily appear the same
+    /// order as they appear in `self`.
+    fn deduce_translation(
+	&self,
+	other: &ScannerReport,
+	rotation: &AffineTransform,
+	likely_equivalences: &[(usize, usize)],
+	min_size: usize
+    ) -> Vec<(AffineTransform, Vec<Point>)> {
+	let rotated_points = other.transform(&rotation);
+	let mut diffs: HashMap<Array2<i32>, usize> = HashMap::new();
+	for (my_index, their_index) in likely_equivalences {
+	    let diff: Array2<i32> = compute_diff(
+		&self.points[*my_index],
+		&rotated_points[*their_index]
+	    );
+	    *diffs.entry(diff).or_insert(0) += 1;
+	}
+
+	diffs.into_iter()
+	    .filter_map(|(diff, votes)| {
+		println!("{:>2} votes: {:?}", votes, diff);
+		if votes >= min_size { Some(diff) } else { None }
+	    })
+	    .map(|diff| {
+		AffineTransformBuilder::new()
+		    .translate([diff[(0, 0)], diff[(1, 0)], diff[(2, 0)]])
+		    .rotate(rotation.rotation()).expect("rotation should already be valid")
+		    .build()
+	    })
+	    .map(|t| {
+		let transformed: Vec<Point> = other.transform(&t);
+		(t, transformed)
+	    })
+	    .collect()
     }
 
     fn compute_overlaps(
         &self,
         other: &ScannerReport,
         min_size: usize,
-    ) -> Vec<(Transform, HashSet<Point>)> {
-        let mut result = Vec::new();
-        let my_bb = match self.bounding_box() {
-            None => {
-                // No points in this scanner report, so cannot overlap
-                // with anything.
-                return Vec::new();
-            }
-            Some(bb) => bb,
-        };
-        dbg!(&my_bb);
+    ) -> Vec<(AffineTransform, Vec<Point>)> {
+	assert!(self.len() > 1);
+	assert!(other.len() > 1);
+	let my_fingerprint = self.fingerprint_permutation();
+	let their_fingerprint = other.fingerprint_permutation();
 
-        for transform in Transform::all_rotations() {
-            //for transform in [Transform::try_from_rotations(&[1, 0, 0]).unwrap()] {
-            match other
-                .bounding_box()
-                .map(|bounds| bounds.transform(&transform))
-            {
-                None => {
-                    continue; // no points in the other scanner report.
-                }
-                Some(bb) => {
-                    dbg!(&bb);
-                    let slice = s![0..3, 0..1]; // drops the extra `1`.
-                    let diff: Array1<i32> = (&my_bb.min - &bb.min)
-                        .slice(slice)
-                        .index_axis(Axis(1), 0)
-                        .to_owned();
-                    println!("compute_overlaps: diff={:?}", &diff);
-                    let translation: [i32; 3] = [diff[0], diff[1], diff[2]];
-                    let rotate_and_translate = match Transform::try_from_rotations_translations(
-                        transform.rotation(),
-                        &translation,
-                    ) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            panic!(
-                                "Transform::all_rotations() returned an invalid rotation ({})",
-                                e
-                            );
-                        }
-                    };
-                    dbg!(bb.transform(&rotate_and_translate));
+	fn pairs_by_distance(distances: &[(i64, usize, usize)]) -> HashMap<i64, Vec<(usize, usize)>> {
+	    distances.iter()
+		.fold(HashMap::new(),
+		      |mut map, (d, i, j)| {
+			  map.entry(*d).or_insert_with(Vec::new).push((*i, *j));
+			  map
+		      })
+	}
 
-                    let other_points: HashSet<Point> = other.transform(&rotate_and_translate);
-                    dbg!(&other_points);
-                    let intersection: HashSet<Point> =
-                        self.points.intersection(&other_points).cloned().collect();
-                    dbg!(&intersection);
-                    if intersection.len() >= min_size {
-                        result.push((rotate_and_translate, intersection));
-                    } else {
-                        println!(
-                            "Dropping intersection since overlap is too small ({} < {})",
-                            intersection.len(),
-                            min_size
-                        );
-                    }
-                }
-            }
-        }
-        result
+	let mut my_distance = pairs_by_distance(my_fingerprint.as_slice());
+	let mut their_distance = pairs_by_distance(their_fingerprint.as_slice());
+	let mut distance_matches: HashMap<i64, (Vec<(usize, usize)>, Vec<(usize, usize)>)> = HashMap::new();
+	for (d, my_pairs) in my_distance.drain() {
+	    if let Some(their_pairs) = their_distance.remove(&d) {
+		distance_matches.insert(d, (my_pairs,  their_pairs));
+	    }
+	}
+	let mut transform_votes: HashMap<AffineTransform, usize> = HashMap::new();
+	let mut likely_equivalences: Vec<(usize, usize)> = Vec::new();
+	for (d, (my_pairs, their_pairs)) in distance_matches.iter() {
+	    if my_pairs.len() == 1 && their_pairs.len() == 1 {
+		println!("candidate: {:>4} {:?} {:?}", &d, &my_pairs, &their_pairs);
+		let (my_diff, my_pairing) = match my_pairs.as_slice() {
+		    [(i, j)] => {
+			let diff = compute_diff(&self.points[*i], &self.points[*j]);
+			println!("    mine: {:>20} {:>20}",
+				 format!("{:>4}", self.points[*i].coordinates.t()),
+				 format!("{:>4}", self.points[*j].coordinates.t()));
+			println!("    diff: {}", diff);
+			(diff, (i, j))
+		    }
+		    _ => { continue; }
+		};
+		let (other_diff, other_pairing) = match their_pairs.as_slice() {
+		    [(i, j)] => {
+			let diff = compute_diff(&other.points[*i], &other.points[*j]);
+			println!("  theirs: {:>20} {:>20}",
+				 format!("{:>4}", other.points[*i].coordinates.t()),
+				 format!("{:>4}", other.points[*j].coordinates.t()));
+			println!("    diff: {}", diff);
+			(diff, (i, j))
+		    }
+		    _ => { continue; }
+		};
+		likely_equivalences.push((*my_pairing.0, *other_pairing.0));
+		likely_equivalences.push((*my_pairing.1, *other_pairing.1));
+		let rotations = find_rotation(&my_diff, &other_diff);
+		if rotations.is_empty() {
+		    println!(
+			"No transform converts {:?} into {:?}",
+			&my_diff, &other_diff
+		    );
+		} else {
+		    for t in rotations {
+			*transform_votes.entry(t.clone()).or_insert(0) += 1;
+			println!(
+			    "AffineTransform {:?} converts {:?} into {:?}",
+			    &t, &my_diff, &other_diff
+			);
+		    }
+		}
+	    }
+	}
+
+	let sufficient_diff_overlaps = |(t, votes): (AffineTransform, usize)| -> Option<AffineTransform> {
+	    if votes >= min_size {
+		Some(t)
+	    } else {
+		None
+	    }
+	};
+	transform_votes.into_iter()
+	    .inspect(|(t, votes)| { println!("{:>2} votes: {:?}", votes, &t);})
+	    .filter_map(sufficient_diff_overlaps)
+	    .flat_map(|r| self.deduce_translation(other, &r, &likely_equivalences, min_size))
+	    .collect()
     }
+}
+
+fn best_overlap(candidates: &[(AffineTransform, Vec<Point>)]) -> Option<&AffineTransform> {
+    let mut result: Option<&AffineTransform> = None;
+    let mut best_overlap_count: usize = 0;
+    for (t, count) in candidates.iter().map(|(t, points)| (t, points.len())) {
+	if count >= best_overlap_count {
+	    best_overlap_count = count;
+	    result = Some(t);
+	}
+    }
+    result
+}
+
+/// Take a number of scanner reports.  Combine them into N groups
+/// where the members of each group have a sufficient overlap with at
+/// least one other member of the same group.
+fn combine_overlapping_reports(
+    reports: &HashMap<i32, ScannerReport>,
+    min_overlap_points: usize,
+) -> HashMap<i32, Vec<(i32, TransformChain)>> {
+    let mut group_leader: HashMap<i32, i32> = HashMap::new();
+    let mut result: HashMap<i32, Vec<(i32, TransformChain)>> = HashMap::new();
+
+    fn find_existing_transform(
+	who: i32,
+	known: &[(i32, TransformChain)]
+    ) -> Option<&TransformChain>  {
+	known.iter().find(|(them, _)| *them == who).map(|(_, t)| t)
+    }
+
+    for (i, left) in reports.iter() {
+	for (j, right) in reports.iter() {
+	    // Invariant: i < j.
+	    if j >= i {
+		continue;
+	    }
+	    let leader: i32 = match group_leader.get(i) {
+		Some(l) => *l,
+		None => {
+		    group_leader.insert(*i, *i);
+		    let map_onto_myself = (*i, TransformChain::empty());
+		    result.insert(*i, vec![map_onto_myself]);
+		    continue;
+		}
+	    };
+	    let followers: &mut Vec<(i32, TransformChain)> = match result.get_mut(&leader) {
+		Some(f) => f,
+		None => {
+		    panic!("inconsistency: {}'s leader is {} but {} does not appear in result",
+			   &i, &leader, &leader);
+		}
+	    };
+
+	    let overlap: Vec<(AffineTransform, Vec<Point>)> = left.compute_overlaps(&right, min_overlap_points);
+	    match overlap.as_slice() {
+		[] => {
+		    // This scan report (j) does not overlap with scan report i.
+		    continue;
+		}
+		candidates => {
+		    match best_overlap(&candidates) {
+			Some(best_transform) => {
+			    group_leader.insert(*j, leader);
+			    if let Some(transform_from_leader_to_j) = find_existing_transform(*i, followers.as_slice()).map(|t| t.then(best_transform)) {
+				followers.push((*j, transform_from_leader_to_j));
+			    } else {
+				panic!("report {} has an overlap with {} and {}'s leader is {}, but there is no known transform mapping {} to {}",
+				       j, i, i, leader, i, leader);
+			    }
+			}
+			None => unreachable!(),
+		    }
+		}
+	    }
+	}
+    }
+    result
+}
+
+#[test]
+fn test_combine_overlapping_reports() {
+    let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
+    let combined = combine_overlapping_reports(&sample_reports, 12);
+    println!("sample input: there are {} non-overlapping groups of reports", combined.len());
+    todo!();
 }
 
 fn get_sample_scanner_reports() -> HashMap<i32, ScannerReport> {
@@ -667,8 +931,10 @@ fn test_compute_overlaps_trivial() {
     let report = parse_input(&[
         "--- scanner 0 ---",
         "1,2,3",
-        "--- scanner 1 ---",
-        "1,2,3", // same points as scanner 0
+        "15,17,91",
+        "--- scanner 1 ---",	// same points as scanner 0
+        "1,2,3",
+        "15,17,91",
     ])
     .expect("valid test data");
     let overlaps = report[&0].compute_overlaps(&report[&1], 1);
@@ -685,17 +951,10 @@ fn test_compute_overlaps() {
     let report0 = sample.get(&0).expect("test input should have scanner 0");
     let report1 = sample.get(&1).expect("test input should have scanner 1");
     let overlaps = report0.compute_overlaps(&report1, 12);
-    match overlaps.as_slice() {
-        [(_t, points)] => {
-            assert!(points.len() >= 12);
-        }
-        [] => {
-            panic!("expected one overlap, got none");
-        }
-        _ => {
-            panic!("expected one overlap, got {}", overlaps.len());
-        }
-    }
+    // There are two rotations which map report1 onto report0.  One is
+    // a half-turn around axis 1, the other is a half-turn around both
+    // axis 0 and axis 2.  These are always equivalent.
+    assert!(!overlaps.is_empty());
 }
 
 #[derive(Debug)]
@@ -709,7 +968,7 @@ impl Display for BadInput {
 
 fn add_scanner_report(
     current_scanner_id: &mut Option<i32>,
-    current_points: &mut HashSet<Point>,
+    current_points: &mut Vec<Point>,
     result: &mut HashMap<i32, ScannerReport>,
 ) -> Result<(), BadInput> {
     match (current_scanner_id.as_mut(), current_points.is_empty()) {
@@ -718,7 +977,7 @@ fn add_scanner_report(
             "saw line containing a point before any scanner id header".to_string(),
         )),
         (Some(id), _) => {
-            result.insert(*id, ScannerReport::from(current_points.clone()));
+            result.insert(*id, ScannerReport::from(current_points.as_slice()));
             *current_scanner_id = None;
             current_points.clear();
             Ok(())
@@ -728,7 +987,7 @@ fn add_scanner_report(
 
 fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> {
     let mut result = HashMap::new();
-    let mut current_points: HashSet<Point> = HashSet::new();
+    let mut current_points: Vec<Point> = Vec::new();
     let mut current_scanner_id: Option<i32> = None;
     const SEP_PATTERN: &str = r"^--- scanner (\d+) ---$";
     let sep_re = Regex::new(SEP_PATTERN).unwrap();
@@ -764,7 +1023,7 @@ fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> 
         } else {
             match Point::from_str(line) {
                 Ok(point) => {
-                    current_points.insert(point);
+                    current_points.push(point);
                 }
                 Err(e) => {
                     return Err(BadInput(format!("invalid point '{}': {}", line, e)));
