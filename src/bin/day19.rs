@@ -260,6 +260,7 @@ impl AffineTransform {
     }
 }
 
+#[derive(Debug)]
 struct TransformChain {
     transforms: Vec<AffineTransform>,
 }
@@ -277,8 +278,10 @@ impl Transform for TransformChain {
 	self.transforms.iter().fold(p.clone(), |p, t| t.transform(&p))
     }
     fn then(&self, t: &AffineTransform) -> TransformChain {
-	let mut transforms = self.transforms.clone();
+	let mut transforms: Vec<AffineTransform> = Vec::with_capacity(
+	    1 + self.transforms.len());
 	transforms.push(t.clone());
+	transforms.extend(self.transforms.clone());
 	TransformChain {
 	    transforms
 	}
@@ -392,6 +395,10 @@ fn test_point_display() {
 }
 
 impl Point {
+    fn origin() -> Point {
+	Point::from([0, 0, 0])
+    }
+
     fn translate(&self, translation: &Array2<i32>) -> Point {
 	let mut result = &self.coordinates + translation;
 	result[(3, 0)] = 1;
@@ -672,7 +679,7 @@ impl ScannerReport {
 	self.points.len()
     }
 
-    fn transform(&self, t: &AffineTransform) -> Vec<Point> {
+    fn transform<T: Transform>(&self, t: &T) -> Vec<Point> {
         self.points
             .iter()
 	    .map(|p| t.transform(p))
@@ -719,7 +726,7 @@ impl ScannerReport {
 	likely_equivalences: &[(usize, usize)],
 	min_size: usize
     ) -> Vec<(AffineTransform, Vec<Point>)> {
-	let rotated_points = other.transform(&rotation);
+	let rotated_points = other.transform(rotation);
 	let mut diffs: HashMap<Array2<i32>, usize> = HashMap::new();
 	for (my_index, their_index) in likely_equivalences {
 	    let diff: Array2<i32> = compute_diff(
@@ -731,7 +738,7 @@ impl ScannerReport {
 
 	diffs.into_iter()
 	    .filter_map(|(diff, votes)| {
-		println!("{:>2} votes: {:?}", votes, diff);
+		//println!("{:>2} votes: {:?}", votes, diff);
 		if votes >= min_size { Some(diff) } else { None }
 	    })
 	    .map(|diff| {
@@ -778,14 +785,14 @@ impl ScannerReport {
 	let mut likely_equivalences: Vec<(usize, usize)> = Vec::new();
 	for (d, (my_pairs, their_pairs)) in distance_matches.iter() {
 	    if my_pairs.len() == 1 && their_pairs.len() == 1 {
-		println!("candidate: {:>4} {:?} {:?}", &d, &my_pairs, &their_pairs);
+		//println!("candidate: {:>4} {:?} {:?}", &d, &my_pairs, &their_pairs);
 		let (my_diff, my_pairing) = match my_pairs.as_slice() {
 		    [(i, j)] => {
 			let diff = compute_diff(&self.points[*i], &self.points[*j]);
-			println!("    mine: {:>20} {:>20}",
-				 format!("{:>4}", self.points[*i].coordinates.t()),
-				 format!("{:>4}", self.points[*j].coordinates.t()));
-			println!("    diff: {}", diff);
+			//println!("    mine: {:>20} {:>20}",
+			//	 format!("{:>4}", self.points[*i].coordinates.t()),
+			//	 format!("{:>4}", self.points[*j].coordinates.t()));
+			//println!("    diff: {}", diff);
 			(diff, (i, j))
 		    }
 		    _ => { continue; }
@@ -793,10 +800,10 @@ impl ScannerReport {
 		let (other_diff, other_pairing) = match their_pairs.as_slice() {
 		    [(i, j)] => {
 			let diff = compute_diff(&other.points[*i], &other.points[*j]);
-			println!("  theirs: {:>20} {:>20}",
-				 format!("{:>4}", other.points[*i].coordinates.t()),
-				 format!("{:>4}", other.points[*j].coordinates.t()));
-			println!("    diff: {}", diff);
+			//println!("  theirs: {:>20} {:>20}",
+			//	 format!("{:>4}", other.points[*i].coordinates.t()),
+			//	 format!("{:>4}", other.points[*j].coordinates.t()));
+			//println!("    diff: {}", diff);
 			(diff, (i, j))
 		    }
 		    _ => { continue; }
@@ -805,17 +812,17 @@ impl ScannerReport {
 		likely_equivalences.push((*my_pairing.1, *other_pairing.1));
 		let rotations = find_rotation(&my_diff, &other_diff);
 		if rotations.is_empty() {
-		    println!(
-			"No transform converts {:?} into {:?}",
-			&my_diff, &other_diff
-		    );
+		    //println!(
+		    //	"No transform converts {:?} into {:?}",
+		    //	&my_diff, &other_diff
+		    //);
 		} else {
 		    for t in rotations {
 			*transform_votes.entry(t.clone()).or_insert(0) += 1;
-			println!(
-			    "AffineTransform {:?} converts {:?} into {:?}",
-			    &t, &my_diff, &other_diff
-			);
+			//println!(
+			//    "AffineTransform {:?} converts {:?} into {:?}",
+			//    &t, &my_diff, &other_diff
+			//);
 		    }
 		}
 	    }
@@ -829,7 +836,7 @@ impl ScannerReport {
 	    }
 	};
 	transform_votes.into_iter()
-	    .inspect(|(t, votes)| { println!("{:>2} votes: {:?}", votes, &t);})
+	    //.inspect(|(t, votes)| { println!("{:>2} votes: {:?}", votes, &t);})
 	    .filter_map(sufficient_diff_overlaps)
 	    .flat_map(|r| self.deduce_translation(other, &r, &likely_equivalences, min_size))
 	    .collect()
@@ -857,6 +864,12 @@ fn combine_overlapping_reports(
 ) -> HashMap<i32, Vec<(i32, TransformChain)>> {
     let mut group_leader: HashMap<i32, i32> = HashMap::new();
     let mut result: HashMap<i32, Vec<(i32, TransformChain)>> = HashMap::new();
+    let mut pair_transform: HashMap<(i32, i32), AffineTransform> = HashMap::new();
+    let report_list: Vec<(i32, &ScannerReport)> = {
+	let mut report_id_list: Vec<i32> = reports.keys().copied().collect();
+	report_id_list.sort_unstable();
+	report_id_list.iter().map(|id| (*id, reports.get(id).unwrap())).collect()
+    };
 
     fn find_existing_transform(
 	who: i32,
@@ -865,44 +878,80 @@ fn combine_overlapping_reports(
 	known.iter().find(|(them, _)| *them == who).map(|(_, t)| t)
     }
 
-    for (i, left) in reports.iter() {
-	for (j, right) in reports.iter() {
-	    // Invariant: i < j.
-	    if j >= i {
+    match report_list.first() {
+	Some((seed, _)) => {
+	    println!("Selected report {} as the initial leader...", seed);
+	    group_leader.insert(*seed, *seed);
+	    let map_onto_myself = (*seed, TransformChain::empty());
+	    result.insert(*seed, vec![map_onto_myself]);
+	}
+	None => {
+	    return HashMap::new();
+	}
+    }
+
+    for (i, left) in &report_list {
+	let leader: i32 = match group_leader.get(i) {
+	    Some(l) => {
+		println!("Report {} has {} as its leader", i, l);
+		*l
+	    }
+	    None => {
+		println!("We won't consider report {} as the left-hand-side yet", i);
 		continue;
 	    }
-	    let leader: i32 = match group_leader.get(i) {
-		Some(l) => *l,
-		None => {
-		    group_leader.insert(*i, *i);
-		    let map_onto_myself = (*i, TransformChain::empty());
-		    result.insert(*i, vec![map_onto_myself]);
+	};
+	let followers: &mut Vec<(i32, TransformChain)> = match result.get_mut(&leader) {
+	    Some(f) => f,
+	    None => {
+		panic!("inconsistency: {}'s leader is {} but {} does not appear in result",
+		       &i, &leader, &leader);
+		}
+	};
+	println!("Finding reports which overlap with report {} (and therefore also have {} as their leader)...", i, leader);
+
+	let mut found: bool = false;
+	for (j, right) in &report_list {
+	    if j == i { continue; }
+	    match group_leader.get(&j) {
+		Some(leader) => {
+		    // already done
+		    println!("No need to check report {} for overlaps with {}, we already know that {} overlaps with {}", j, i, j, leader);
 		    continue;
 		}
-	    };
-	    let followers: &mut Vec<(i32, TransformChain)> = match result.get_mut(&leader) {
-		Some(f) => f,
 		None => {
-		    panic!("inconsistency: {}'s leader is {} but {} does not appear in result",
-			   &i, &leader, &leader);
+		    println!("We don't know what report {} overlaps with yet", j);
 		}
-	    };
-
-	    let overlap: Vec<(AffineTransform, Vec<Point>)> = left.compute_overlaps(&right, min_overlap_points);
+	    }
+	    println!("Checking report {} for possible overlap with report {}", j, i);
+	    let overlap: Vec<(AffineTransform, Vec<Point>)> = right.compute_overlaps(&left, min_overlap_points);
+	    if overlap.is_empty() {
+		println!("report {} does not overlap with report {}", j, i);
+	    } else {
+		println!("report {} overlaps with report {}", j, i);
+	    }
 	    match overlap.as_slice() {
 		[] => {
 		    // This scan report (j) does not overlap with scan report i.
-		    continue;
 		}
 		candidates => {
+		    found = true;
 		    match best_overlap(&candidates) {
 			Some(best_transform) => {
+			    pair_transform.insert((*j, *i), best_transform.clone());
 			    group_leader.insert(*j, leader);
-			    if let Some(transform_from_leader_to_j) = find_existing_transform(*i, followers.as_slice()).map(|t| t.then(best_transform)) {
+			    for (id, l) in group_leader.iter_mut() {
+				if *l == *i {
+				    *l = leader
+				}
+			    }
+
+			    if let Some(transform_from_leader_to_j) = find_existing_transform(
+				*i, followers.as_slice()).map(|t| t.then(best_transform)) {
 				followers.push((*j, transform_from_leader_to_j));
 			    } else {
-				panic!("report {} has an overlap with {} and {}'s leader is {}, but there is no known transform mapping {} to {}",
-				       j, i, i, leader, i, leader);
+				panic!("report {} has an overlap with {} whose leader is {}, but there is no known transform mapping {} to {}",
+				       j, i, leader, i, leader);
 			    }
 			}
 			None => unreachable!(),
@@ -910,6 +959,30 @@ fn combine_overlapping_reports(
 		}
 	    }
 	}
+	if !found {
+	    println!("Found no new overlaps for {} (which is already known to overlap {})", i, leader);
+	}
+    }
+    dbg!(&group_leader);
+
+    println!(r"Known transforms from\to:");
+    print!("{:>3} ", "");
+    for (to_report, _) in &report_list {
+	print!("{:>2}", to_report);
+    }
+    println!();
+    for (from_report, _) in &report_list {
+	print!("{:>3} ", from_report);
+	for (to_report,_) in &report_list {
+	    if from_report == to_report {
+		print!("{:>2}", "I");
+	    } else if pair_transform.contains_key(&(*from_report, *to_report)) {
+		print!("{:>2}", "Y");
+	    } else {
+		print!("{:>2}", "-");
+	    }
+	}
+	println!();
     }
     result
 }
@@ -919,6 +992,35 @@ fn test_combine_overlapping_reports() {
     let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
     let combined = combine_overlapping_reports(&sample_reports, 12);
     println!("sample input: there are {} non-overlapping groups of reports", combined.len());
+    for (leader, reports) in &combined {
+	print!("Reports overlapping with {:>3}:", leader);
+	for (follower, _transform) in reports {
+	    print!(" {}", follower);
+	}
+	println!();
+    }
+    for (leader, reports) in &combined {
+	for (follower, transform) in reports {
+	    println!("Transform {}->{} is {:?}", leader, follower, &transform);
+	}
+    }
+    let mut all_points: HashSet<Point> = HashSet::new();
+    for (leader, reports) in &combined {
+	for (follower, transform) in reports {
+	    println!("Scanner {} is at position {} relative to scanner {}",
+		     follower, transform.transform(&Point::origin()), leader);
+	    match sample_reports.get(follower) {
+		Some(report) => {
+		    all_points.extend(report.transform(transform));
+		}
+		None => {
+		    // This case is supposedly unreachable.
+		    panic!("bug: report {} overlaps {} but {} is not present in sample_reports", follower, leader, follower);
+		}
+	    }
+	}
+    }
+    println!("There are {} distinct points", all_points.len());
     todo!();
 }
 
