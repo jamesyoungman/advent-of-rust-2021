@@ -422,7 +422,7 @@ impl Point {
 
 impl Transform for AffineTransform {
     fn transform(&self, p: &Point) -> Point {
-	println!("Applying transform {:?} to {}", self, &p);
+	//println!("Applying transform {:?} to {}", self, &p);
 	Point {
 	    coordinates: self.matrix.dot(&p.coordinates),
 	}
@@ -1238,6 +1238,38 @@ fn same_points(
     }
 }
 
+#[cfg(test)]
+fn str_slice_to_points(s: &[&str]) -> Vec<Point> {
+    s.iter()
+	.map(|s| Point::from_str(s).expect("valid input"))
+	.collect()
+}
+
+#[cfg(test)]
+fn assert_same_points(
+    label: &str,
+    left: &[Point],
+    right: &[Point],
+) {
+    let same = same_points(left, right);
+    match same {
+	Ok(()) => (),
+	Err((only_left, common, only_right)) => {
+	    println!("failure: mismatch for {}", label);
+	    for x in only_left {
+		println!("Expected but not found: {}", x);
+	    }
+	    for x in common {
+		println!("Common to both (as epected): {}", x);
+	    }
+	    for x in only_right {
+		println!("Unexpected: {}", x);
+	    }
+	    panic!("incorrect set of points");
+	}
+    }
+}
+
 #[test]
 fn test_compute_overlaps() {
     let sample = get_sample_scanner_reports();
@@ -1259,9 +1291,10 @@ fn test_compute_overlaps() {
 	  _scanner1_other_points_relative_to_0,
 	), ..] => {
 	    let scanner1_origin = t.transform(&Point::origin());
+	    println!("test_compute_overlaps: scanner 1 is at {}", scanner1_origin);
 	    assert_eq!(scanner1_origin, Point::from([68, -1246, -43]));
 	    let expected_scanner1_overlap_points: Vec<Point> =
-		[
+		str_slice_to_points(&[
 		    "-618,-824,-621",
 		    "-537,-823,-458",
 		    "-447,-329,318",
@@ -1274,26 +1307,10 @@ fn test_compute_overlaps() {
 		    "-345,-311,381",
 		    "459,-707,401",
 		    "-485,-357,347",
-		].iter()
-		.map(|s| Point::from_str(s).expect("valid input"))
-		.collect();
-	    let same = same_points(&expected_scanner1_overlap_points,
-				   scanner1_overlap_points_relative_to_0);
-	    match same {
-		Ok(()) => (),
-		Err((only_left, common, only_right)) => {
-		    for x in only_left {
-			println!("Expected but not found: {}", x);
-		    }
-		    for x in common {
-			println!("Common to both (as epected): {}", x);
-		    }
-		    for x in only_right {
-			println!("Unexpected: {}", x);
-		    }
-		    panic!("incorrect set of points common between scanners 0 and 1");
-		}
-	    }
+		]);
+	    assert_same_points("scanner 1",
+			       &expected_scanner1_overlap_points,
+			       scanner1_overlap_points_relative_to_0);
 	    t
 	}
 	[] => {
@@ -1305,7 +1322,7 @@ fn test_compute_overlaps() {
     assert!(!overlaps.is_empty());
     show_overlaps(1, 4, &overlaps);
     let (t04, t14) = match overlaps.as_slice() {
-	[(t14, _overlap_points, _nonoverlap_points), ..] => {
+	[(t14, scanner4_overlap_points_relative_to_0, _nonoverlap_points), ..] => {
 	    let expected_scanner4_origin_as_seen_from_0 = Point::from([-20, -1133, 1061]);
 	    println!("Computing scanner 4 origin with respect to 0, MANUALLY...");
 	    let scanner4_origin = // from 0's point of view.
@@ -1322,13 +1339,30 @@ fn test_compute_overlaps() {
 	    let scanner4_origin = t04.transform(&Point::origin());
 	    assert_eq!(scanner4_origin, Point::from([-20, -1133, 1061]),
 		       "transform stack using then() for 4->0 is wrong");
+	    println!("test_compute_overlaps: scanner 4 is at {}", scanner4_origin);
+
+	    let expected_scanner4_overlap_points: Vec<Point> = str_slice_to_points(&[
+		"459,-707,401",
+		"-739,-1745,668",
+		"-485,-357,347",
+		"432,-2009,850",
+		"528,-643,409",
+		"423,-701,434",
+		"-345,-311,381",
+		"408,-1815,803",
+		"534,-1912,768",
+		"-687,-1600,576",
+		"-447,-329,318",
+		"-635,-1737,486"]);
+	    assert_same_points("scanner 4",
+			       &expected_scanner4_overlap_points,
+			       scanner4_overlap_points_relative_to_0);
 	    (t04, t14)
 	}
 	[] => {
 	    panic!("there should be an overlap between 1 and 4");
 	}
     };
-
 
     let overlaps = report4.compute_overlaps(&report2, MIN_OVERLAPS);
     assert!(!overlaps.is_empty());
@@ -1351,6 +1385,7 @@ fn test_compute_overlaps() {
 	    assert_eq!(scanner2_origin,
 		       expected_scanner2_origin_as_seen_from_0,
 		       "transform stack using then for 2->0 is wrong");
+	    println!("test_compute_overlaps: scanner 2 is at {}", scanner2_origin);
 	    (t02, t42)
 	}
 	[] => {
@@ -1378,6 +1413,7 @@ fn test_compute_overlaps() {
 	    assert_eq!(scanner3_origin,
 		       expected_scanner3_origin_as_seen_from_0,
 		       "transform stack using then 3->0 is wrong");
+	    println!("test_compute_overlaps: scanner 3 is at {}", scanner3_origin);
 	}
 	[] => {
 	    panic!("there should be an overlap between 1 and 3");
