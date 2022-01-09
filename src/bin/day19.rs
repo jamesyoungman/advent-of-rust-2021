@@ -260,7 +260,7 @@ impl AffineTransform {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TransformChain {
     transforms: Vec<AffineTransform>,
 }
@@ -270,6 +270,10 @@ impl TransformChain {
 	TransformChain {
 	    transforms: Vec::new(),
 	}
+    }
+
+    fn len(&self) -> usize {
+	self.transforms.len()
     }
 }
 
@@ -418,6 +422,7 @@ impl Point {
 
 impl Transform for AffineTransform {
     fn transform(&self, p: &Point) -> Point {
+	println!("Applying transform {:?} to {}", self, &p);
 	Point {
 	    coordinates: self.matrix.dot(&p.coordinates),
 	}
@@ -428,7 +433,7 @@ impl Transform for AffineTransform {
     /// to take the time right now to debug that.
     fn then(&self, next: &AffineTransform) -> TransformChain {
 	TransformChain {
-	    transforms: vec![self.clone(), next.clone()],
+	    transforms: vec![next.clone(), self.clone()],
 	}
     }
 }
@@ -679,6 +684,15 @@ impl ScannerReport {
 	self.points.len()
     }
 
+    fn point_set(&self) -> HashSet<Point> {
+	self.points.iter().fold(
+	    HashSet::new(),
+	    |mut acc, p| {
+		acc.insert(p.clone());
+		acc
+	    })
+    }
+
     fn transform<T: Transform>(&self, t: &T) -> Vec<Point> {
         self.points
             .iter()
@@ -758,7 +772,7 @@ impl ScannerReport {
         &self,
         other: &ScannerReport,
         min_size: usize,
-    ) -> Vec<(AffineTransform, Vec<Point>)> {
+    ) -> Vec<(AffineTransform, Vec<Point>, Vec<Point>)> {
 	assert!(self.len() > 1);
 	assert!(other.len() > 1);
 	let my_fingerprint = self.fingerprint_permutation();
@@ -783,7 +797,7 @@ impl ScannerReport {
 	}
 	let mut transform_votes: HashMap<AffineTransform, usize> = HashMap::new();
 	let mut likely_equivalences: Vec<(usize, usize)> = Vec::new();
-	for (d, (my_pairs, their_pairs)) in distance_matches.iter() {
+	for (_d, (my_pairs, their_pairs)) in distance_matches.iter() {
 	    if my_pairs.len() == 1 && their_pairs.len() == 1 {
 		//println!("candidate: {:>4} {:?} {:?}", &d, &my_pairs, &their_pairs);
 		let (my_diff, my_pairing) = match my_pairs.as_slice() {
@@ -835,18 +849,42 @@ impl ScannerReport {
 		None
 	    }
 	};
-	transform_votes.into_iter()
+	let overlaps: Vec<(AffineTransform, Vec<Point>)> = transform_votes.into_iter()
 	    //.inspect(|(t, votes)| { println!("{:>2} votes: {:?}", votes, &t);})
 	    .filter_map(sufficient_diff_overlaps)
 	    .flat_map(|r| self.deduce_translation(other, &r, &likely_equivalences, min_size))
-	    .collect()
+	    .collect();
+	let mut result: Vec<(AffineTransform, Vec<Point>, Vec<Point>)> = Vec::with_capacity(
+	    overlaps.len());
+	for (transform, transformed_points) in overlaps {
+	    let mut maybe_overlapping: HashMap<bool, Vec<Point>> = HashMap::with_capacity(2);
+	    maybe_overlapping.insert(true, vec![]);
+	    maybe_overlapping.insert(false, vec![]);
+	    let my_points = self.point_set();
+	    for p in transformed_points {
+		let overlaps: bool = my_points.contains(&p);
+		match maybe_overlapping.get_mut(&overlaps) {
+		    Some(v) => { v.push(p); }
+		    None => unreachable!(),
+		}
+	    }
+	    let item: (AffineTransform, Vec<Point>, Vec<Point>) = (
+		transform,
+		maybe_overlapping.remove(&true).unwrap(),
+		maybe_overlapping.remove(&false).unwrap(),
+	    );
+	    result.push(item);
+	}
+	result
     }
 }
 
-fn best_overlap(candidates: &[(AffineTransform, Vec<Point>)]) -> Option<&AffineTransform> {
+fn best_overlap(
+    candidates: &[(AffineTransform, Vec<Point>, Vec<Point>)]
+) -> Option<&AffineTransform> {
     let mut result: Option<&AffineTransform> = None;
     let mut best_overlap_count: usize = 0;
-    for (t, count) in candidates.iter().map(|(t, points)| (t, points.len())) {
+    for (t, count) in candidates.iter().map(|(t, overlaps, _others)| (t, overlaps.len())) {
 	if count >= best_overlap_count {
 	    best_overlap_count = count;
 	    result = Some(t);
@@ -861,9 +899,9 @@ fn best_overlap(candidates: &[(AffineTransform, Vec<Point>)]) -> Option<&AffineT
 fn combine_overlapping_reports(
     reports: &HashMap<i32, ScannerReport>,
     min_overlap_points: usize,
-) -> HashMap<i32, Vec<(i32, TransformChain)>> {
+) -> HashMap<(i32, i32), TransformChain> {
     let mut group_leader: HashMap<i32, i32> = HashMap::new();
-    let mut result: HashMap<i32, Vec<(i32, TransformChain)>> = HashMap::new();
+    let mut result: HashMap<(i32, i32), TransformChain> = HashMap::new();
     let mut pair_transform: HashMap<(i32, i32), AffineTransform> = HashMap::new();
     let report_list: Vec<(i32, &ScannerReport)> = {
 	let mut report_id_list: Vec<i32> = reports.keys().copied().collect();
@@ -882,8 +920,7 @@ fn combine_overlapping_reports(
 	Some((seed, _)) => {
 	    println!("Selected report {} as the initial leader...", seed);
 	    group_leader.insert(*seed, *seed);
-	    let map_onto_myself = (*seed, TransformChain::empty());
-	    result.insert(*seed, vec![map_onto_myself]);
+	    result.insert((*seed, *seed), TransformChain::empty());
 	}
 	None => {
 	    return HashMap::new();
@@ -901,13 +938,6 @@ fn combine_overlapping_reports(
 		continue;
 	    }
 	};
-	let followers: &mut Vec<(i32, TransformChain)> = match result.get_mut(&leader) {
-	    Some(f) => f,
-	    None => {
-		panic!("inconsistency: {}'s leader is {} but {} does not appear in result",
-		       &i, &leader, &leader);
-		}
-	};
 	println!("Finding reports which overlap with report {} (and therefore also have {} as their leader)...", i, leader);
 
 	let mut found: bool = false;
@@ -924,7 +954,8 @@ fn combine_overlapping_reports(
 		}
 	    }
 	    println!("Checking report {} for possible overlap with report {}", j, i);
-	    let overlap: Vec<(AffineTransform, Vec<Point>)> = right.compute_overlaps(&left, min_overlap_points);
+	    let overlap: Vec<(AffineTransform, Vec<Point>, Vec<Point>)> =
+		right.compute_overlaps(&left, min_overlap_points);
 	    if overlap.is_empty() {
 		println!("report {} does not overlap with report {}", j, i);
 	    } else {
@@ -940,15 +971,16 @@ fn combine_overlapping_reports(
 			Some(best_transform) => {
 			    pair_transform.insert((*j, *i), best_transform.clone());
 			    group_leader.insert(*j, leader);
-			    for (id, l) in group_leader.iter_mut() {
+			    for (_id, l) in group_leader.iter_mut() {
 				if *l == *i {
 				    *l = leader
 				}
 			    }
 
-			    if let Some(transform_from_leader_to_j) = find_existing_transform(
-				*i, followers.as_slice()).map(|t| t.then(best_transform)) {
-				followers.push((*j, transform_from_leader_to_j));
+			    let maybe_t: Option<TransformChain> = result.get(&(leader, *i))
+				.map(|t: &TransformChain| -> TransformChain { (*t).clone() });
+			    if let Some(t) = maybe_t {
+				result.insert((leader, *j), t.then(best_transform));
 			    } else {
 				panic!("report {} has an overlap with {} whose leader is {}, but there is no known transform mapping {} to {}",
 				       j, i, leader, i, leader);
@@ -976,10 +1008,15 @@ fn combine_overlapping_reports(
 	for (to_report,_) in &report_list {
 	    if from_report == to_report {
 		print!("{:>2}", "I");
-	    } else if pair_transform.contains_key(&(*from_report, *to_report)) {
-		print!("{:>2}", "Y");
 	    } else {
-		print!("{:>2}", "-");
+		match pair_transform.get(&(*from_report, *to_report)) {
+		    Some(_t) => {
+			print!("{:>2}", "Y");
+		    }
+		    None => {
+			print!("{:>2}", "-");
+		    }
+		}
 	    }
 	}
 	println!();
@@ -992,36 +1029,145 @@ fn test_combine_overlapping_reports() {
     let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
     let combined = combine_overlapping_reports(&sample_reports, 12);
     println!("sample input: there are {} non-overlapping groups of reports", combined.len());
-    for (leader, reports) in &combined {
-	print!("Reports overlapping with {:>3}:", leader);
-	for (follower, _transform) in reports {
-	    print!(" {}", follower);
-	}
-	println!();
+    for ((leader, follower), transform) in &combined {
+	println!("Transform {}->{} is {:?}", leader, follower, &transform);
+	println!("Scanner {} is at position {} relative to scanner {}",
+		 follower, transform.transform(&Point::origin()), leader);
     }
-    for (leader, reports) in &combined {
-	for (follower, transform) in reports {
-	    println!("Transform {}->{} is {:?}", leader, follower, &transform);
-	}
-    }
+    let expected_beacons: Vec<Point> = [
+	"-892,524,684",
+	"-876,649,763",
+	"-838,591,734",
+	"-789,900,-551",
+	"-739,-1745,668",
+	"-706,-3180,-659",
+	"-697,-3072,-689",
+	"-689,845,-530",
+	"-687,-1600,576",
+	"-661,-816,-575",
+	"-654,-3158,-753",
+	"-635,-1737,486",
+	"-631,-672,1502",
+	"-624,-1620,1868",
+	"-620,-3212,371",
+	"-618,-824,-621",
+	"-612,-1695,1788",
+	"-601,-1648,-643",
+	"-584,868,-557",
+	"-537,-823,-458",
+	"-532,-1715,1894",
+	"-518,-1681,-600",
+	"-499,-1607,-770",
+	"-485,-357,347",
+	"-470,-3283,303",
+	"-456,-621,1527",
+	"-447,-329,318",
+	"-430,-3130,366",
+	"-413,-627,1469",
+	"-345,-311,381",
+	"-36,-1284,1171",
+	"-27,-1108,-65",
+	"7,-33,-71",
+	"12,-2351,-103",
+	"26,-1119,1091",
+	"346,-2985,342",
+	"366,-3059,397",
+	"377,-2827,367",
+	"390,-675,-793",
+	"396,-1931,-563",
+	"404,-588,-901",
+	"408,-1815,803",
+	"423,-701,434",
+	"432,-2009,850",
+	"443,580,662",
+	"455,729,728",
+	"456,-540,1869",
+	"459,-707,401",
+	"465,-695,1988",
+	"474,580,667",
+	"496,-1584,1900",
+	"497,-1838,-617",
+	"527,-524,1933",
+	"528,-643,409",
+	"534,-1912,768",
+	"544,-627,-890",
+	"553,345,-567",
+	"564,392,-477",
+	"568,-2007,-577",
+	"605,-1665,1952",
+	"612,-1593,1893",
+	"630,319,-379",
+	"686,-3108,-505",
+	"776,-3184,-501",
+	"846,-3110,-434",
+	"1135,-1161,1235",
+	"1243,-1093,1063",
+	"1660,-552,429",
+	"1693,-557,386",
+	"1735,-437,1738",
+	"1749,-1800,1813",
+	"1772,-405,1572",
+	"1776,-675,371",
+	"1779,-442,1789",
+	"1780,-1548,337",
+	"1786,-1538,337",
+	"1847,-1591,415",
+	"1889,-1729,1762",
+	"1994,-1805,1792",
+    ].iter()
+	.map(|s| Point::from_str(s).expect("valid input"))
+	.collect();
+
     let mut all_points: HashSet<Point> = HashSet::new();
-    for (leader, reports) in &combined {
-	for (follower, transform) in reports {
-	    println!("Scanner {} is at position {} relative to scanner {}",
-		     follower, transform.transform(&Point::origin()), leader);
-	    match sample_reports.get(follower) {
-		Some(report) => {
-		    all_points.extend(report.transform(transform));
+    for ((leader, follower), transform) in &combined {
+	match sample_reports.get(leader) {
+	    Some(leader_report) => {
+		match sample_reports.get(follower) {
+		    Some(report) => {
+			let leader_points = leader_report.point_set();
+			for p in report.transform(transform) {
+			    all_points.insert(p);
+			}
+		    }
+		    None => {
+			// This case is supposedly unreachable.
+			panic!("bug: report {} overlaps {} but {} is not present in sample_reports", follower, leader, follower);
+		    }
 		}
-		None => {
-		    // This case is supposedly unreachable.
-		    panic!("bug: report {} overlaps {} but {} is not present in sample_reports", follower, leader, follower);
-		}
+	    }
+	    None => {
+		panic!("bug: report {} overlaps {} but {} is not present in sample_reports", follower, leader, leader);
 	    }
 	}
     }
-    println!("There are {} distinct points", all_points.len());
-    todo!();
+    println!("There are {} distinct points:", all_points.len());
+    for p in all_points.iter() {
+	println!("{}", p);
+    }
+
+
+    let same = same_points(&expected_beacons,
+			   all_points.iter().cloned().collect::<Vec<_>>().as_slice());
+    match same {
+	Ok(()) => (),
+	Err((only_left, common, only_right)) => {
+	    println!("points only in expected_beacons: {}", only_left.len());
+	    println!("points common to both: {}", common.len());
+	    println!("points only in all_points: {}", only_right.len());
+
+	    for x in only_left {
+		println!("Expected but not found: {}", x);
+	    }
+	    for x in common {
+		println!("Found, as expected: {}", x);
+	    }
+	    for x in only_right {
+		println!("Unexpected: {}", x);
+	    }
+	    panic!("incorrect set of beacons");
+	}
+    }
+
 }
 
 fn get_sample_scanner_reports() -> HashMap<i32, ScannerReport> {
@@ -1041,9 +1187,54 @@ fn test_compute_overlaps_trivial() {
     .expect("valid test data");
     let overlaps = report[&0].compute_overlaps(&report[&1], 1);
     assert!(overlaps.len() >= 1);
-    for (_t, points) in overlaps.iter() {
-        assert_eq!(points, &report[&0].points);
-        assert_eq!(points, &report[&1].points);
+    for (_t, overlap_points, others) in overlaps.iter() {
+        assert_eq!(overlap_points, &report[&0].points);
+        assert_eq!(overlap_points, &report[&1].points);
+	assert!(others.is_empty());
+    }
+}
+
+#[cfg(test)]
+fn show_overlaps(
+    from: i32,
+    to: i32,
+    overlaps: &[(AffineTransform, Vec<Point>, Vec<Point>)]
+) {
+    for (i, (transform, _, _)) in overlaps.iter().enumerate() {
+	let scanner1_origin = transform.transform(&Point::origin());
+	println!(
+	    "Overlap {0}: scanner {2} must be at {3} (relative to scanner {1})",
+	    i,
+	    from,
+	    to,
+	    scanner1_origin,
+	);
+    }
+}
+
+#[cfg(test)]
+fn point_set(points: &[Point]) -> HashSet<Point> {
+    points.iter()
+	.fold(HashSet::with_capacity(points.len()),
+	      |mut result, item| {
+		  result.insert(item.clone());
+		  result
+	      })
+}
+
+fn same_points(
+    left: &[Point],
+    right: &[Point],
+) -> Result<(), (Vec<Point>, Vec<Point>, Vec<Point>)> {
+    let left_set = point_set(left);
+    let right_set = point_set(right);
+    let only_right: Vec<Point> = right.iter().filter(|r| !left_set.contains(r)).cloned().collect();
+    let only_left: Vec<Point> = left.iter().filter(|l| !right_set.contains(l)).cloned().collect();
+    let common: Vec<Point> = left.iter().filter(|l| right_set.contains(l)).cloned().collect();
+    if only_left.is_empty() && only_right.is_empty() {
+	Ok(())
+    } else {
+	Err((only_left, common, only_right))
     }
 }
 
@@ -1052,11 +1243,146 @@ fn test_compute_overlaps() {
     let sample = get_sample_scanner_reports();
     let report0 = sample.get(&0).expect("test input should have scanner 0");
     let report1 = sample.get(&1).expect("test input should have scanner 1");
-    let overlaps = report0.compute_overlaps(&report1, 12);
+    let report2 = sample.get(&2).expect("test input should have scanner 2");
+    let report3 = sample.get(&3).expect("test input should have scanner 3");
+    let report4 = sample.get(&4).expect("test input should have scanner 4");
+    const MIN_OVERLAPS: usize = 12;
+    let overlaps = report0.compute_overlaps(&report1, MIN_OVERLAPS);
     // There are two rotations which map report1 onto report0.  One is
     // a half-turn around axis 1, the other is a half-turn around both
     // axis 0 and axis 2.  These are always equivalent.
     assert!(!overlaps.is_empty());
+    show_overlaps(0, 1, &overlaps);
+    let t01 = match overlaps.as_slice() {
+	[(t,
+	  scanner1_overlap_points_relative_to_0,
+	  _scanner1_other_points_relative_to_0,
+	), ..] => {
+	    let scanner1_origin = t.transform(&Point::origin());
+	    assert_eq!(scanner1_origin, Point::from([68, -1246, -43]));
+	    let expected_scanner1_overlap_points: Vec<Point> =
+		[
+		    "-618,-824,-621",
+		    "-537,-823,-458",
+		    "-447,-329,318",
+		    "404,-588,-901",
+		    "544,-627,-890",
+		    "528,-643,409",
+		    "-661,-816,-575",
+		    "390,-675,-793",
+		    "423,-701,434",
+		    "-345,-311,381",
+		    "459,-707,401",
+		    "-485,-357,347",
+		].iter()
+		.map(|s| Point::from_str(s).expect("valid input"))
+		.collect();
+	    let same = same_points(&expected_scanner1_overlap_points,
+				   scanner1_overlap_points_relative_to_0);
+	    match same {
+		Ok(()) => (),
+		Err((only_left, common, only_right)) => {
+		    for x in only_left {
+			println!("Expected but not found: {}", x);
+		    }
+		    for x in common {
+			println!("Common to both (as epected): {}", x);
+		    }
+		    for x in only_right {
+			println!("Unexpected: {}", x);
+		    }
+		    panic!("incorrect set of points common between scanners 0 and 1");
+		}
+	    }
+	    t
+	}
+	[] => {
+	    panic!("there should be an overlap between 0 and 1");
+	}
+    };
+
+    let overlaps = report1.compute_overlaps(&report4, MIN_OVERLAPS);
+    assert!(!overlaps.is_empty());
+    show_overlaps(1, 4, &overlaps);
+    let (t04, t14) = match overlaps.as_slice() {
+	[(t14, _overlap_points, _nonoverlap_points), ..] => {
+	    let expected_scanner4_origin_as_seen_from_0 = Point::from([-20, -1133, 1061]);
+	    println!("Computing scanner 4 origin with respect to 0, MANUALLY...");
+	    let scanner4_origin = // from 0's point of view.
+		t01.transform(
+		    &t14.transform(
+			&Point::origin()
+		    )
+		);
+	    assert_eq!(scanner4_origin,
+		       expected_scanner4_origin_as_seen_from_0,
+		       "manual transform stack 4->0 is wrong");
+	    println!("Computing scanner 4 origin with respect to 0, with THEN...");
+	    let t04 = t01.then(&t14);
+	    let scanner4_origin = t04.transform(&Point::origin());
+	    assert_eq!(scanner4_origin, Point::from([-20, -1133, 1061]),
+		       "transform stack using then() for 4->0 is wrong");
+	    (t04, t14)
+	}
+	[] => {
+	    panic!("there should be an overlap between 1 and 4");
+	}
+    };
+
+
+    let overlaps = report4.compute_overlaps(&report2, MIN_OVERLAPS);
+    assert!(!overlaps.is_empty());
+    show_overlaps(4, 2, &overlaps);
+    let (_t02, _t42) = match overlaps.as_slice() {
+	[(t42, _overlap_points, _nonoverlap_points), ..] => {
+	    let expected_scanner2_origin_as_seen_from_0 = Point::from([1105, -1205, 1229]);
+	    println!("Computing scanner 4 origin with respect to 0, MANUALLY...");
+	    let scanner2_origin = // from 0's point of view
+		t01.transform(
+		    &t14.transform(
+			&t42.transform(
+			    &Point::origin())));
+	    assert_eq!(scanner2_origin,
+		       expected_scanner2_origin_as_seen_from_0,
+		       "manual transform stack 2->0 is wrong");
+	    println!("Computing scanner 4 origin with respect to 0, with THEN...");
+	    let t02 = t04.then(&t42);
+	    let scanner2_origin = t02.transform(&Point::origin());
+	    assert_eq!(scanner2_origin,
+		       expected_scanner2_origin_as_seen_from_0,
+		       "transform stack using then for 2->0 is wrong");
+	    (t02, t42)
+	}
+	[] => {
+	    panic!("there should be an overlap between 4 and 2");
+	}
+    };
+
+    let overlaps = report1.compute_overlaps(&report3, MIN_OVERLAPS);
+    assert!(!overlaps.is_empty());
+    show_overlaps(1, 3, &overlaps);
+    match overlaps.as_slice() {
+	[(t13, _overlap_points, _nonoverlap_points), ..] => {
+	    let expected_scanner3_origin_as_seen_from_0 = Point::from([-92, -2380, -20]);
+	    println!("Computing scanner 3 origin with respect to 0, MANUALLY...");
+	    let scanner3_origin = // from 0's point of view
+		t01.transform(
+		    &t13.transform(
+			&Point::origin()));
+	    assert_eq!(scanner3_origin,
+		       expected_scanner3_origin_as_seen_from_0,
+		       "manual transform stack 3->0 is wrong");
+	    println!("Computing scanner 3 origin with respect to 0, with THEN...");
+	    let t03 = t01.then(&t13);
+	    let scanner3_origin = t03.transform(&Point::origin());
+	    assert_eq!(scanner3_origin,
+		       expected_scanner3_origin_as_seen_from_0,
+		       "transform stack using then 3->0 is wrong");
+	}
+	[] => {
+	    panic!("there should be an overlap between 1 and 3");
+	}
+    }
 }
 
 #[derive(Debug)]
