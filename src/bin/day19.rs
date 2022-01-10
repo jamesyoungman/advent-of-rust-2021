@@ -10,6 +10,7 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use ndarray::prelude::*;
+use ndarray::Zip;
 use regex::Regex;
 use tracing_subscriber::prelude::*;
 
@@ -394,20 +395,13 @@ impl Point {
 	Point::from([0, 0, 0])
     }
 
-    fn translate(&self, translation: &Array2<i32>) -> Point {
-	let mut result = &self.coordinates + translation;
-	result[(3, 0)] = 1;
-	Point {
-	    coordinates: result
-	}
-    }
-
-    fn xyz(&self) -> Array1<i32> {
-        let slice = s![0..3, 0..1]; // drops the extra `1`.
-        self.coordinates
-            .slice(slice)
-            .index_axis(Axis(1), 0)
-            .to_owned()
+    fn manhattan3(&self, other: &Point) -> u64 {
+	(0..3)
+	    .map(|axis: usize| -> u64 {
+		let subscript = (axis, 0);
+		(manhattan1(self.coordinates[subscript], other.coordinates[subscript])) as u64
+	    })
+	    .sum()
     }
 }
 
@@ -429,14 +423,6 @@ impl Transform for AffineTransform {
     }
 }
 
-#[test]
-fn test_translate() {
-    let origin = Point::from([0, 0, 0]);
-    let a = origin.translate(&array![0, 0, 0, 0].insert_axis(Axis(1)));
-    assert_eq!(a, origin);
-}
-
-
 impl Sub for &Point {
     type Output = Array2<i32>;
     fn sub(self, other: Self) -> Array2<i32> {
@@ -451,58 +437,57 @@ impl Sub for Point {
     }
 }
 
-//#[derive(Debug)]
-//pub struct AxisAlignedBoundingBox {
-//    pub min: Point,
-//    pub max: Point,
-//}
-//
-//impl AxisAlignedBoundingBox {
-//    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
-//        AxisAlignedBoundingBox { min, max }
-//    }
-//
-//    fn insert(&mut self, p: &Point) {
-//        Zip::from(&mut self.min.coordinates)
-//            .and(&p.coordinates)
-//            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
-//        Zip::from(&mut self.max.coordinates)
-//            .and(&p.coordinates)
-//            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
-//    }
-//
-//    fn transform(&self, t: &AffineTransform) -> AxisAlignedBoundingBox {
-//        let tmin = self.min.transform(t);
-//        let mut result = AxisAlignedBoundingBox {
-//            min: tmin.clone(),
-//            max: tmin.clone(),
-//        };
-//        result.insert(&self.max.transform(t));
-//        result
-//    }
-//}
-//
-//fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
-//where
-//    I: IntoIterator<Item = &'a Point>,
-//{
-//    let mut it = input.into_iter();
-//    let p = it.next()?;
-//    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
-//    for item in it {
-//        bb.insert(&item);
-//    }
-//    Some(bb)
-//}
-//
-//impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
-//    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
-//    where
-//        I: IntoIterator<Item = &'a Point>,
-//    {
-//        aabb_of_points(items)
-//    }
-//}
+#[derive(Debug)]
+pub struct AxisAlignedBoundingBox {
+    pub min: Point,
+    pub max: Point,
+}
+
+impl AxisAlignedBoundingBox {
+    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
+        AxisAlignedBoundingBox { min, max }
+    }
+
+    fn grow_to_include(&mut self, p: &Point) {
+        Zip::from(&mut self.min.coordinates)
+            .and(&p.coordinates)
+            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
+        Zip::from(&mut self.max.coordinates)
+            .and(&p.coordinates)
+            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
+    }
+
+    fn manhattan3(&self) -> i64 {
+	(0..3)
+	    .map(|axis: usize| -> i64 {
+		let distance = self.max.coordinates[(axis, 0)] - self.min.coordinates[(axis, 0)];
+		distance.into()
+	    })
+	    .sum()
+    }
+}
+
+fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
+where
+    I: IntoIterator<Item = &'a Point>,
+{
+    let mut it = input.into_iter();
+    let p = it.next()?;
+    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
+    for item in it {
+        bb.grow_to_include(&item);
+    }
+    Some(bb)
+}
+
+impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
+    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
+    where
+        I: IntoIterator<Item = &'a Point>,
+    {
+        aabb_of_points(items)
+    }
+}
 
 #[test]
 fn test_example() {
@@ -610,15 +595,6 @@ fn test_parse_point() {
     assert!(Point::from_str(",1,2,3").is_err()); // too many fields
     assert!(Point::from_str("1,antelope,3").is_err()); // not a number
     assert!(Point::from_str("1,2,3.3").is_err()); // floaing point not allowed
-}
-
-#[test]
-fn test_point_xyz() {
-    let p = Point::from([99, -200, 6]);
-    let xyz = p.xyz();
-    assert_eq!(xyz[0], 99);
-    assert_eq!(xyz[1], -200);
-    assert_eq!(xyz[2], 6);
 }
 
 #[derive(Debug)]
@@ -1066,27 +1042,48 @@ fn test_combine_overlapping_reports() {
 
 }
 
-fn unique_points(reports: &HashMap<i32, ScannerReport>) -> HashSet<Point> {
-    let mut all_points: HashSet<Point> = HashSet::new();
+fn solve(
+    reports: &HashMap<i32, ScannerReport>
+) -> (
+    HashMap<i32, Point>,	// scanner positions
+    HashMap<i32, HashSet<Point>> // beacon positions
+) {
+    let mut beacons: HashMap<i32, HashSet<Point>> = HashMap::with_capacity(
+	reports.values().map(|rep| rep.points.len()).sum());
+    let mut scanners: HashMap<i32, Point> = HashMap::with_capacity(reports.len());
+
     let mut combined = combine_overlapping_reports(&reports, MIN_OVERLAPS);
-    for ((_, follower), transform) in combined.drain() {
+    for ((leader, follower), transform) in combined.drain() {
+	scanners.entry(leader).or_insert_with(|| Point::origin());
+	scanners.insert(follower, transform.transform(&Point::origin()));
+
 	if let Some(report) = reports.get(&follower) {
-	    for p in report.transform(&transform) {
-		all_points.insert(p);
-	    }
+	    let points: HashSet<Point> = report.transform(&transform).iter().cloned().collect();
+	    beacons.insert(follower, points);
 	} else {
 	    // This case is supposedly unreachable.
 	    panic!("bug: report {} is not present in the input", follower);
 	}
     }
-    all_points
+    (scanners, beacons)
+}
+
+fn unique_points(beacons: &HashMap<i32, HashSet<Point>>) -> HashSet<Point> {
+    let output_size = beacons.values().map(|points| points.len()).sum();
+    beacons.values()
+	.fold(HashSet::with_capacity(output_size),
+	      |mut result, points| {
+		  result.extend(points.iter().cloned());
+		  result
+	      })
 }
 
 
 #[test]
 fn test_unique_points() {
     let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
-    let uniques = unique_points(&sample_reports);
+    let (_scanners, beacons) = solve(&sample_reports);
+    let uniques = unique_points(&beacons);
     assert_eq!(uniques.len(), 79);
 }
 
@@ -1525,9 +1522,47 @@ fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> 
 //    assert_eq!(expected_beacons, got_beacons);
 //}
 
-fn part1(reports: &HashMap<i32, ScannerReport>) {
-    let beacons = unique_points(reports);
-    println!("Day 19 part 1: {}", beacons.len());
+
+fn scanner_separation(scanners: &HashMap<i32, Point>) -> Option<u64> {
+    let mut greatest_separation: Option<u64> = None;
+    for lpos in scanners.values() {
+	for rpos in scanners.values() {
+	    let separation: u64 = lpos.manhattan3(&rpos);
+	    match greatest_separation {
+		Some(d) if d > separation => (),
+		_ => {
+		    greatest_separation = Some(separation);
+		}
+	    }
+	}
+    }
+    greatest_separation
+}
+
+#[test]
+fn test_scanner_separation() {
+    let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
+    let (scanners, _beacons) = solve(&sample_reports);
+    assert_eq!(scanner_separation(&scanners), Some(3621));
+}
+
+
+fn parts_1_and_2(reports: &HashMap<i32, ScannerReport>) {
+    let (scanners, beacons) = solve(reports);
+    let mut unique_points: HashSet<Point> = HashSet::with_capacity(
+	beacons.values().map(|points| points.len()).sum());
+    for points in beacons.values() {
+	unique_points.extend(points.iter().cloned());
+    }
+    println!("Day 19 part 1: there are {} beacons", unique_points.len());
+    match scanner_separation(&scanners) {
+	Some(sep) => {
+	    println!("Day 19 part 2: largest separation is {}", sep);
+	}
+	None => {
+	    println!("Day 19 part 2: input was apparently empty");
+	}
+    }
 }
 
 fn run() -> Result<(), String> {
@@ -1555,7 +1590,7 @@ fn run() -> Result<(), String> {
     match parse_input(&ls) {
         Err(e) => Err(e.to_string()),
         Ok(reports) => {
-            part1(&reports);
+            parts_1_and_2(&reports);
             Ok(())
         }
     }
