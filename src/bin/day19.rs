@@ -10,7 +10,6 @@ use std::ops::Sub;
 use std::str::FromStr;
 
 use ndarray::prelude::*;
-use ndarray::Zip;
 use regex::Regex;
 use tracing_subscriber::prelude::*;
 
@@ -311,7 +310,7 @@ impl AffineTransformBuilder {
         {
             Err(e)
         } else {
-            self.rotations = Some(amounts.clone());
+            self.rotations = Some(*amounts);
             Ok(self)
         }
     }
@@ -437,58 +436,6 @@ impl Sub for Point {
     }
 }
 
-#[derive(Debug)]
-pub struct AxisAlignedBoundingBox {
-    pub min: Point,
-    pub max: Point,
-}
-
-impl AxisAlignedBoundingBox {
-    fn new(min: Point, max: Point) -> AxisAlignedBoundingBox {
-        AxisAlignedBoundingBox { min, max }
-    }
-
-    fn grow_to_include(&mut self, p: &Point) {
-        Zip::from(&mut self.min.coordinates)
-            .and(&p.coordinates)
-            .for_each(|curr_min, point| *curr_min = min(*curr_min, *point));
-        Zip::from(&mut self.max.coordinates)
-            .and(&p.coordinates)
-            .for_each(|curr_max, point| *curr_max = max(*curr_max, *point));
-    }
-
-    fn manhattan3(&self) -> i64 {
-	(0..3)
-	    .map(|axis: usize| -> i64 {
-		let distance = self.max.coordinates[(axis, 0)] - self.min.coordinates[(axis, 0)];
-		distance.into()
-	    })
-	    .sum()
-    }
-}
-
-fn aabb_of_points<'a, I>(input: I) -> Option<AxisAlignedBoundingBox>
-where
-    I: IntoIterator<Item = &'a Point>,
-{
-    let mut it = input.into_iter();
-    let p = it.next()?;
-    let mut bb = AxisAlignedBoundingBox::new(p.clone(), p.clone());
-    for item in it {
-        bb.grow_to_include(&item);
-    }
-    Some(bb)
-}
-
-impl<'a> FromIterator<&'a Point> for Option<AxisAlignedBoundingBox> {
-    fn from_iter<I>(items: I) -> Option<AxisAlignedBoundingBox>
-    where
-        I: IntoIterator<Item = &'a Point>,
-    {
-        aabb_of_points(items)
-    }
-}
-
 #[test]
 fn test_example() {
     let m = array![[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
@@ -600,7 +547,6 @@ fn test_parse_point() {
 #[derive(Debug)]
 struct ScannerReport {
     points: Vec<Point>,
-    //bb: Option<AxisAlignedBoundingBox>,
 }
 
 impl From<&[Point]> for ScannerReport {
@@ -667,10 +613,6 @@ impl ScannerReport {
 	    .collect()
     }
 
-    //fn bounding_box(&self) -> Option<&AxisAlignedBoundingBox> {
-    //    self.bb.as_ref()
-    //}
-
     fn fingerprint_permutation(&self) -> Vec<(i64, usize, usize)> {
         let slice = s![0..3, 0..1]; // drops the extra `1`.
 	let raw_values: Vec<Array1<i32>> = self.points.iter()
@@ -678,10 +620,10 @@ impl ScannerReport {
 	    .collect();
 	let mut distances: Vec<(i64, usize, usize)> = Vec::new();
 	for (i, a) in raw_values.iter().enumerate() {
-	    for j in 0..i {
-		let dist: i64 = manhattan3(a, &raw_values[j]);
-		distances.push((dist, i, j))
-	    }
+	    distances.extend(
+		raw_values[0..i].iter()
+		    .enumerate()
+		    .map(|(j, b)| (manhattan3(a, b), i, j)));
 	}
 	distances.sort_unstable();
 	distances
@@ -756,7 +698,8 @@ impl ScannerReport {
 
 	let mut my_distance = pairs_by_distance(my_fingerprint.as_slice());
 	let mut their_distance = pairs_by_distance(their_fingerprint.as_slice());
-	let mut distance_matches: HashMap<i64, (Vec<(usize, usize)>, Vec<(usize, usize)>)> = HashMap::new();
+	type Pair = (usize, usize);
+	let mut distance_matches: HashMap<i64, (Vec<Pair>, Vec<Pair>)> = HashMap::new();
 	for (d, my_pairs) in my_distance.drain() {
 	    if let Some(their_pairs) = their_distance.remove(&d) {
 		distance_matches.insert(d, (my_pairs,  their_pairs));
@@ -766,7 +709,7 @@ impl ScannerReport {
 	let mut likely_equivalences: Vec<(usize, usize)> = Vec::new();
 
 	for (_d, (my_pairs, their_pairs)) in distance_matches.iter() {
-	    if their_pairs.len() == 0 {
+	    if their_pairs.is_empty() {
 		continue;
 	    }
 	    for (my_i, my_j) in my_pairs {
@@ -863,19 +806,11 @@ fn combine_overlapping_reports(
     let mut already_combined: HashSet<Point> = HashSet::with_capacity(
 	reports.values().map(|report| report.points.len()).sum());
     while !todo.is_empty() {
-	println!("{} reports joined so far; {} to do; combined result has {} points so far",
-		 result.len(), todo.len(), combined.points.len());
 	let mut made_progress = false;
 	let mut next_todo: Vec<(i32, &ScannerReport)> = Vec::with_capacity(todo.len());
 	for (id, report) in todo.drain(0..) {
 	    let mut overlaps = combined.compute_overlaps(report, min_overlap_points);
-	    println!("There are {} overlap candidates with report {}", overlaps.len(), id);
-	    for (i, (_t, over, other)) in overlaps.iter().enumerate() {
-		println!("Candidate {} has {} overlaps and {} non-overlaps",
-			 i, over.len(), other.len());
-	    }
 	    if let Some((transform, _overlapping_points, _non_overlapping_points)) = overlaps.pop() {
-		println!("Joining report {} (which has {} points)", id, report.points.len());
 		println!("Scanner {} is at position {} relative to scanner {}",
 			 id, transform.transform(&Point::origin()), seed_id);
 		for point in report.points.iter() {
@@ -890,7 +825,6 @@ fn combine_overlapping_reports(
 	    } else {
 		// We did not find an overlap yet, so try the next report;
 		// add this one back into the to-do list.
-		println!("Not yet able to join report {}", id);
 		next_todo.push((id, report));
 	    }
 	}
@@ -901,7 +835,7 @@ fn combine_overlapping_reports(
 	}
     }
     assert!(todo.is_empty());
-    return result;
+    result
 }
 
 #[test]
@@ -1052,9 +986,9 @@ fn solve(
 	reports.values().map(|rep| rep.points.len()).sum());
     let mut scanners: HashMap<i32, Point> = HashMap::with_capacity(reports.len());
 
-    let mut combined = combine_overlapping_reports(&reports, MIN_OVERLAPS);
+    let mut combined = combine_overlapping_reports(reports, MIN_OVERLAPS);
     for ((leader, follower), transform) in combined.drain() {
-	scanners.entry(leader).or_insert_with(|| Point::origin());
+	scanners.entry(leader).or_insert_with(Point::origin);
 	scanners.insert(follower, transform.transform(&Point::origin()));
 
 	if let Some(report) = reports.get(&follower) {
@@ -1425,109 +1359,11 @@ fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> 
     Ok(result)
 }
 
-//#[test]
-//fn test_solve1() {
-//    const EXPECTED_BEACONS: &[&str] = &[
-//	"-892,524,684",
-//	"-876,649,763",
-//	"-838,591,734",
-//	"-789,900,-551",
-//	"-739,-1745,668",
-//	"-706,-3180,-659",
-//	"-697,-3072,-689",
-//	"-689,845,-530",
-//	"-687,-1600,576",
-//	"-661,-816,-575",
-//	"-654,-3158,-753",
-//	"-635,-1737,486",
-//	"-631,-672,1502",
-//	"-624,-1620,1868",
-//	"-620,-3212,371",
-//	"-618,-824,-621",
-//	"-612,-1695,1788",
-//	"-601,-1648,-643",
-//	"-584,868,-557",
-//	"-537,-823,-458",
-//	"-532,-1715,1894",
-//	"-518,-1681,-600",
-//	"-499,-1607,-770",
-//	"-485,-357,347",
-//	"-470,-3283,303",
-//	"-456,-621,1527",
-//	"-447,-329,318",
-//	"-430,-3130,366",
-//	"-413,-627,1469",
-//	"-345,-311,381",
-//	"-36,-1284,1171",
-//	"-27,-1108,-65",
-//	"7,-33,-71",
-//	"12,-2351,-103",
-//	"26,-1119,1091",
-//	"346,-2985,342",
-//	"366,-3059,397",
-//	"377,-2827,367",
-//	"390,-675,-793",
-//	"396,-1931,-563",
-//	"404,-588,-901",
-//	"408,-1815,803",
-//	"423,-701,434",
-//	"432,-2009,850",
-//	"443,580,662",
-//	"455,729,728",
-//	"456,-540,1869",
-//	"459,-707,401",
-//	"465,-695,1988",
-//	"474,580,667",
-//	"496,-1584,1900",
-//	"497,-1838,-617",
-//	"527,-524,1933",
-//	"528,-643,409",
-//	"534,-1912,768",
-//	"544,-627,-890",
-//	"553,345,-567",
-//	"564,392,-477",
-//	"568,-2007,-577",
-//	"605,-1665,1952",
-//	"612,-1593,1893",
-//	"630,319,-379",
-//	"686,-3108,-505",
-//	"776,-3184,-501",
-//	"846,-3110,-434",
-//	"1135,-1161,1235",
-//	"1243,-1093,1063",
-//	"1660,-552,429",
-//	"1693,-557,386",
-//	"1735,-437,1738",
-//	"1749,-1800,1813",
-//	"1772,-405,1572",
-//	"1776,-675,371",
-//	"1779,-442,1789",
-//	"1780,-1548,337",
-//	"1786,-1538,337",
-//	"1847,-1591,415",
-//	"1889,-1729,1762",
-//	"1994,-1805,1792",
-//    ];
-//
-//    let reports = get_sample_scanner_reports();
-//
-//    let expected_beacons: HashSet<Point> = {
-//	let mut result: HashSet<Point> = HashSet::new();
-//	for bl in EXPECTED_BEACONS {
-//	    result.insert(Point::from_str(bl).expect("valid expected test result"));
-//	}
-//	result
-//    };
-//    let got_beacons: HashSet<Point> = solve1(&reports);
-//    assert_eq!(expected_beacons, got_beacons);
-//}
-
-
 fn scanner_separation(scanners: &HashMap<i32, Point>) -> Option<u64> {
     let mut greatest_separation: Option<u64> = None;
     for lpos in scanners.values() {
 	for rpos in scanners.values() {
-	    let separation: u64 = lpos.manhattan3(&rpos);
+	    let separation: u64 = lpos.manhattan3(rpos);
 	    match greatest_separation {
 		Some(d) if d > separation => (),
 		_ => {
@@ -1549,12 +1385,8 @@ fn test_scanner_separation() {
 
 fn parts_1_and_2(reports: &HashMap<i32, ScannerReport>) {
     let (scanners, beacons) = solve(reports);
-    let mut unique_points: HashSet<Point> = HashSet::with_capacity(
-	beacons.values().map(|points| points.len()).sum());
-    for points in beacons.values() {
-	unique_points.extend(points.iter().cloned());
-    }
-    println!("Day 19 part 1: there are {} beacons", unique_points.len());
+    let uniques: HashSet<Point> = unique_points(&beacons);
+    println!("Day 19 part 1: there are {} beacons", uniques.len());
     match scanner_separation(&scanners) {
 	Some(sep) => {
 	    println!("Day 19 part 2: largest separation is {}", sep);
