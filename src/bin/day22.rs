@@ -3,7 +3,7 @@ use std::io;
 use std::io::prelude::*;
 
 mod base {
-    use core::ops::RangeInclusive;
+    use core::ops::Range;
     use std::cmp::{max, min};
     use std::str::FromStr;
 
@@ -27,13 +27,13 @@ mod base {
 
     #[derive(Debug, PartialEq, Eq, Clone)]
     pub struct Range3D {
-        pub x: RangeInclusive<i32>,
-        pub y: RangeInclusive<i32>,
-        pub z: RangeInclusive<i32>,
+        pub x: Range<i32>,
+        pub y: Range<i32>,
+        pub z: Range<i32>,
     }
 
-    pub fn crop_range(r: &RangeInclusive<i32>) -> Option<RangeInclusive<i32>> {
-        let result = (max(-50, *r.start()))..=(min(50, *r.end()));
+    pub fn crop_range(r: &Range<i32>) -> Option<Range<i32>> {
+        let result = (max(-50, r.start))..(min(50, r.end));
         if result.is_empty() {
             None
         } else {
@@ -44,9 +44,9 @@ mod base {
     impl Range3D {
         pub fn intersect(&self, other: &Range3D) -> Range3D {
             Range3D {
-                x: max(*self.x.start(), *other.x.start())..=min(*self.x.end(), *other.x.end()),
-                y: max(*self.y.start(), *other.y.start())..=min(*self.y.end(), *other.y.end()),
-                z: max(*self.z.start(), *other.z.start())..=min(*self.z.end(), *other.z.end()),
+                x: max(self.x.start, other.x.start)..min(self.x.end, other.x.end),
+                y: max(self.y.start, other.y.start)..min(self.y.end, other.y.end),
+                z: max(self.z.start, other.z.start)..min(self.z.end, other.z.end),
             }
         }
     }
@@ -58,10 +58,10 @@ mod base {
         Beyond,
     }
 
-    fn relation_of_point_to_range(val: i32, range: &RangeInclusive<i32>) -> PointLineRelation {
-        if range.start() > &val {
+    fn relation_of_point_to_range(val: i32, range: &Range<i32>) -> PointLineRelation {
+        if range.start > val {
             PointLineRelation::Before
-        } else if range.end() < &val {
+        } else if range.end <= val {
             PointLineRelation::Beyond
         } else {
             PointLineRelation::Within
@@ -73,20 +73,37 @@ mod base {
             self.x.is_empty() || self.y.is_empty() || self.z.is_empty()
         }
 
+	pub fn xlen(&self) -> u64 {
+            (self.x.end - self.x.start)
+                .try_into()
+                .expect("x range should have a positive number of entries")
+	}
+
+	pub fn ylen(&self) -> u64 {
+            (self.y.end - self.y.start)
+                .try_into()
+                .expect("y range should have a positive number of entries")
+	}
+
+	pub fn zlen(&self) -> u64 {
+            (self.z.end - self.z.start)
+                .try_into()
+                .expect("z range should have a positive number of entries")
+	}
+
+	pub fn xy_cross_sectional_area(&self) -> u64 {
+	    if self.is_empty() {
+		0
+	    } else {
+		self.xlen() * self.ylen()
+	    }
+	}
+
         pub fn count_points(&self) -> u64 {
             if self.is_empty() {
                 0
             } else {
-                let x_size: u64 = (self.x.end() - self.x.start() + 1)
-                    .try_into()
-                    .expect("x range should have a positive number of entries");
-                let y_size: u64 = (self.y.end() - self.y.start() + 1)
-                    .try_into()
-                    .expect("y range should have a positive number of entries");
-                let z_size: u64 = (self.z.end() - self.z.start() + 1)
-                    .try_into()
-                    .expect("z range should have a positive number of entries");
-                x_size * y_size * z_size
+                self.xy_cross_sectional_area() * self.zlen()
             }
         }
 
@@ -100,12 +117,12 @@ mod base {
                 PointLineRelation::Beyond => (Some(self), None),
                 PointLineRelation::Within => (
                     Some(Range3D {
-                        x: *self.x.start()..=xboundary,
+                        x: self.x.start..xboundary,
                         y: self.y.clone(),
                         z: self.z.clone(),
                     }),
                     Some(Range3D {
-                        x: (xboundary + 1)..=*self.x.end(),
+                        x: xboundary..self.x.end,
                         y: self.y,
                         z: self.z,
                     }),
@@ -120,12 +137,12 @@ mod base {
                 PointLineRelation::Within => (
                     Some(Range3D {
                         x: self.x.clone(),
-                        y: *self.y.start()..=yboundary,
+                        y: self.y.start..yboundary,
                         z: self.z.clone(),
                     }),
                     Some(Range3D {
                         x: self.x,
-                        y: (yboundary + 1)..=*self.y.end(),
+                        y: yboundary..self.y.end,
                         z: self.z,
                     }),
                 ),
@@ -140,12 +157,12 @@ mod base {
                     Some(Range3D {
                         x: self.x.clone(),
                         y: self.y.clone(),
-                        z: *self.z.start()..=zboundary,
+                        z: self.z.start..zboundary,
                     }),
                     Some(Range3D {
                         x: self.x,
                         y: self.y,
-                        z: (zboundary + 1)..=*self.z.end(),
+                        z: zboundary..self.z.end,
                     }),
                 ),
             }
@@ -170,36 +187,36 @@ mod base {
     #[test]
     fn test_range3d_split_x() {
         let r = Range3D {
-            x: 5..=10,
-            y: 20..=30,
-            z: 50..=90,
+            x: 5..10,
+            y: 20..30,
+            z: 50..90,
         };
         assert_eq!(r.clone().split_x(1000000), (Some(r), None));
 
         let r = Range3D {
-            x: 5..=10,
-            y: 20..=30,
-            z: 50..=90,
+            x: 5..10,
+            y: 20..30,
+            z: 50..90,
         };
         assert_eq!(r.clone().split_x(-1000000), (None, Some(r)));
 
         let r = Range3D {
-            x: 5..=10,
-            y: 20..=30,
-            z: 50..=90,
+            x: 5..10,
+            y: 20..30,
+            z: 50..90,
         };
         assert_eq!(
             r.clone().split_x(8),
             (
                 Some(Range3D {
-                    x: 5..=8,
-                    y: 20..=30,
-                    z: 50..=90,
+                    x: 5..8,
+                    y: 20..30,
+                    z: 50..90,
                 }),
                 Some(Range3D {
-                    x: 9..=10,
-                    y: 20..=30,
-                    z: 50..=90,
+                    x: 8..10,
+                    y: 20..30,
+                    z: 50..90,
                 })
             )
         );
@@ -208,36 +225,36 @@ mod base {
     #[test]
     fn test_range3d_split_y() {
         let r = Range3D {
-            x: 20..=30,
-            y: 5..=10,
-            z: 50..=90,
+            x: 20..30,
+            y: 5..10,
+            z: 50..90,
         };
         assert_eq!(r.clone().split_y(1000000), (Some(r), None));
 
         let r = Range3D {
-            x: 20..=30,
-            y: 5..=10,
-            z: 50..=90,
+            x: 20..30,
+            y: 5..10,
+            z: 50..90,
         };
         assert_eq!(r.clone().split_y(-1000000), (None, Some(r)));
 
         let r = Range3D {
-            x: 20..=30,
-            y: 5..=10,
-            z: 50..=90,
+            x: 20..30,
+            y: 5..10,
+            z: 50..90,
         };
         assert_eq!(
             r.clone().split_y(8),
             (
                 Some(Range3D {
-                    x: 20..=30,
-                    y: 5..=8,
-                    z: 50..=90,
+                    x: 20..30,
+                    y: 5..8,
+                    z: 50..90,
                 }),
                 Some(Range3D {
-                    x: 20..=30,
-                    y: 9..=10,
-                    z: 50..=90,
+                    x: 20..30,
+                    y: 8..10,
+                    z: 50..90,
                 })
             )
         );
@@ -246,36 +263,36 @@ mod base {
     #[test]
     fn test_range3d_split_z() {
         let r = Range3D {
-            x: 20..=30,
-            y: 50..=90,
-            z: 5..=10,
+            x: 20..30,
+            y: 50..90,
+            z: 5..10,
         };
         assert_eq!(r.clone().split_z(1000000), (Some(r), None));
 
         let r = Range3D {
-            x: 20..=30,
-            y: 50..=90,
-            z: 5..=10,
+            x: 20..30,
+            y: 50..90,
+            z: 5..10,
         };
         assert_eq!(r.clone().split_z(-1000000), (None, Some(r)));
 
         let r = Range3D {
-            x: 20..=30,
-            y: 50..=90,
-            z: 5..=10,
+            x: 20..30,
+            y: 50..90,
+            z: 5..10,
         };
         assert_eq!(
             r.clone().split_z(8),
             (
                 Some(Range3D {
-                    x: 20..=30,
-                    y: 50..=90,
-                    z: 5..=8,
+                    x: 20..30,
+                    y: 50..90,
+                    z: 5..8,
                 }),
                 Some(Range3D {
-                    x: 20..=30,
-                    y: 50..=90,
-                    z: 9..=10,
+                    x: 20..30,
+                    y: 50..90,
+                    z: 8..10,
                 })
             )
         );
@@ -285,24 +302,24 @@ mod base {
     fn test_crop3d() {
         assert_eq!(
             Range3D {
-                x: -54112..=-39298,
-                y: -85059..=-49293,
-                z: -27449..=7877
+                x: -54112..-39298,
+                y: -85059..-49293,
+                z: -27449..7877
             }
             .crop(),
             None
         );
         assert_eq!(
             Range3D {
-                x: -54112..=39298,
-                y: -85059..=-19,
-                z: 20..=200
+                x: -54112..39298,
+                y: -85059..-19,
+                z: 20..200
             }
             .crop(),
             Some(Range3D {
-                x: -50..=50,
-                y: -50..=-19,
-                z: 20..=50
+                x: -50..50,
+                y: -50..-19,
+                z: 20..50
             })
         );
     }
@@ -348,15 +365,17 @@ mod base {
         )(input)
     }
 
-    fn convert_to_range(pair: (i32, i32)) -> Result<RangeInclusive<i32>, String> {
+    fn convert_to_range(pair: (i32, i32)) -> Result<Range<i32>, String> {
         if pair.0 <= pair.1 {
-            Ok((pair.0)..=(pair.1))
+	    // The ranges in the input are inclusive (i.e. a..=b) but
+	    // we use Range<i32> (i.e. a..(b+1)) to represent them.
+            Ok((pair.0)..(pair.1 + 1))
         } else {
             Err(format!("inverted range {:?}", pair))
         }
     }
 
-    fn parse_range(input: &str) -> IResult<&str, RangeInclusive<i32>> {
+    fn parse_range(input: &str) -> IResult<&str, Range<i32>> {
         map_res(
             separated_pair(i32_parser, tag(".."), i32_parser),
             convert_to_range,
@@ -365,9 +384,9 @@ mod base {
 
     fn make_ranges(
         ranges: (
-            RangeInclusive<i32>,
-            RangeInclusive<i32>,
-            RangeInclusive<i32>,
+            Range<i32>,
+            Range<i32>,
+            Range<i32>,
         ),
     ) -> Range3D {
         let (x, y, z) = ranges;
@@ -420,9 +439,9 @@ mod base {
             Ok((
                 "",
                 Instruction::On(Range3D {
-                    x: -54112..=-39298,
-                    y: -85059..=-49293,
-                    z: -27449..=7877
+                    x: -54112..-39297,
+                    y: -85059..-49292,
+                    z: -27449..7878
                 })
             ))
         );
@@ -494,42 +513,29 @@ mod part1 {
 }
 
 mod part2 {
+    use core::ops::Range;
+
     use super::base::*;
+
+    fn zrange(instructions: &[Instruction]) -> Option<Range<i32>> {
+	let zmin: Option<i32> = instructions.iter().map(|inst| inst.affects().z.start).min();
+	let zmax: Option<i32> = instructions.iter().map(|inst| inst.affects().z.end).max();
+	match (zmin, zmax) {
+	    (Some(zmin), Some(zmax)) => Some(zmin..zmax),
+	    _ => None,
+	}
+    }
 
     fn run(instructions: &[Instruction]) -> u64 {
         let mut lit: Vec<Range3D> = Vec::new();
-        let mut overcount_lit: u64 = 0;
-        let mut overcount_off: u64 = 0;
-
-        for instruction in instructions {
-            match instruction {
-                Instruction::On(range) => {
-                    for r in &lit {
-                        let intersection = r.intersect(range);
-                        overcount_lit += intersection.count_points();
-                    }
-                    lit.push(range.clone());
-                }
-                Instruction::Off(range) => {
-                    for r in &lit {
-                        let intersection = r.intersect(range);
-                        overcount_off += intersection.count_points();
-                    }
-                }
-            }
-        }
-        let tmp = lit.iter().map(|r| r.count_points()).sum::<u64>();
-        dbg!(&tmp);
-        dbg!(&overcount_lit);
-        dbg!(&overcount_off);
-        assert!(tmp > overcount_lit);
-        assert!(tmp > overcount_off);
-        dbg!(dbg!(tmp) - dbg!(overcount_lit))
+        let mut count: u64 = 0;
+	todo!()
     }
 
     pub fn part2(instructions: &[Instruction]) {
         let count = run(instructions);
         // 272176456701857 is too low.
+	//
         println!("Day 22 part 2: cubes lit: {}", count);
     }
 }
