@@ -13,6 +13,9 @@ use ndarray::prelude::*;
 use regex::Regex;
 use tracing_subscriber::prelude::*;
 
+const MIN_OVERLAPS: usize = 12;
+
+#[cfg(test)]
 const SAMPLE: &[&str] = &[
     "--- scanner 0 ---",
     "404,-588,-901",
@@ -263,14 +266,6 @@ impl AffineTransform {
 #[derive(Debug, Clone)]
 struct TransformChain {
     transforms: Vec<AffineTransform>,
-}
-
-impl TransformChain {
-    fn empty() -> TransformChain {
-	TransformChain {
-	    transforms: Vec::new(),
-	}
-    }
 }
 
 impl Transform for TransformChain {
@@ -793,36 +788,26 @@ impl ScannerReport {
 	}
 	let mut transform_votes: HashMap<AffineTransform, usize> = HashMap::new();
 	let mut likely_equivalences: Vec<(usize, usize)> = Vec::new();
-	let mut ignore_count: usize = 0;
+
 	for (_d, (my_pairs, their_pairs)) in distance_matches.iter() {
-	    if my_pairs.len() == 0 || their_pairs.len() == 0 {
+	    if their_pairs.len() == 0 {
 		continue;
-	    } else if my_pairs.len() == 1 && their_pairs.len() == 1 {
-		let (my_diff, my_pairing) = match my_pairs.as_slice() {
-		    [(i, j)] => {
-			let diff = compute_diff(&self.points[*i], &self.points[*j]);
-			(diff, (i, j))
-		    }
-		    _ => unreachable!(),
-		};
-		let (other_diff, other_pairing) = match their_pairs.as_slice() {
-		    [(i, j)] => {
-			let diff = compute_diff(&other.points[*i], &other.points[*j]);
-			(diff, (i, j))
-		    }
-		    _ => unreachable!(),
-		};
-		likely_equivalences.push((*my_pairing.0, *other_pairing.0));
-		likely_equivalences.push((*my_pairing.1, *other_pairing.1));
-		let rotations = find_rotation(&my_diff, &other_diff);
-		if !rotations.is_empty() {
-		    for t in rotations {
-			*transform_votes.entry(t.clone()).or_insert(0) += 1;
+	    }
+	    for (my_i, my_j) in my_pairs {
+		let my_diff = compute_diff(&self.points[*my_i], &self.points[*my_j]);
+
+		for (their_i, their_j) in their_pairs {
+		    let their_diff = compute_diff(&other.points[*their_i], &other.points[*their_j]);
+		    let rotations = find_rotation(&my_diff, &their_diff);
+
+		    if !rotations.is_empty() {
+			likely_equivalences.push((*my_i, *their_i));
+			likely_equivalences.push((*my_j, *their_j));
+			for t in rotations {
+			    *transform_votes.entry(t.clone()).or_insert(0) += 1;
+			}
 		    }
 		}
-	    } else {
-		println!("too many possible matches, ignoring this one");
-		ignore_count += 1;
 	    }
 	}
 
@@ -833,7 +818,7 @@ impl ScannerReport {
 		None
 	    }
 	};
-	println!("There are {} votes and {} uncounted votes", transform_votes.len(), ignore_count);
+
 	let overlaps: Vec<(AffineTransform, Vec<Point>)> = transform_votes.into_iter()
 	    //.inspect(|(t, votes)| { println!("{:>2} votes: {:?}", votes, &t);})
 	    .filter_map(sufficient_diff_overlaps)
@@ -862,20 +847,6 @@ impl ScannerReport {
 	}
 	result
     }
-}
-
-fn best_overlap(
-    candidates: &[(AffineTransform, Vec<Point>, Vec<Point>)]
-) -> Option<&AffineTransform> {
-    let mut result: Option<&AffineTransform> = None;
-    let mut best_overlap_count: usize = 0;
-    for (t, count) in candidates.iter().map(|(t, overlaps, _others)| (t, overlaps.len())) {
-	if count >= best_overlap_count {
-	    best_overlap_count = count;
-	    result = Some(t);
-	}
-    }
-    result
 }
 
 fn noop_transform() -> AffineTransform {
@@ -923,11 +894,11 @@ fn combine_overlapping_reports(
 	for (id, report) in todo.drain(0..) {
 	    let mut overlaps = combined.compute_overlaps(report, min_overlap_points);
 	    println!("There are {} overlap candidates with report {}", overlaps.len(), id);
-	    for (i, (t, over, other)) in overlaps.iter().enumerate() {
+	    for (i, (_t, over, other)) in overlaps.iter().enumerate() {
 		println!("Candidate {} has {} overlaps and {} non-overlaps",
 			 i, over.len(), other.len());
 	    }
-	    if let Some((transform, overlapping_points, non_overlapping_points)) = overlaps.pop() {
+	    if let Some((transform, _overlapping_points, _non_overlapping_points)) = overlaps.pop() {
 		println!("Joining report {} (which has {} points)", id, report.points.len());
 		println!("Scanner {} is at position {} relative to scanner {}",
 			 id, transform.transform(&Point::origin()), seed_id);
@@ -1095,6 +1066,31 @@ fn test_combine_overlapping_reports() {
 
 }
 
+fn unique_points(reports: &HashMap<i32, ScannerReport>) -> HashSet<Point> {
+    let mut all_points: HashSet<Point> = HashSet::new();
+    let mut combined = combine_overlapping_reports(&reports, MIN_OVERLAPS);
+    for ((_, follower), transform) in combined.drain() {
+	if let Some(report) = reports.get(&follower) {
+	    for p in report.transform(&transform) {
+		all_points.insert(p);
+	    }
+	} else {
+	    // This case is supposedly unreachable.
+	    panic!("bug: report {} is not present in the input", follower);
+	}
+    }
+    all_points
+}
+
+
+#[test]
+fn test_unique_points() {
+    let sample_reports: HashMap<i32, ScannerReport> = get_sample_scanner_reports();
+    let uniques = unique_points(&sample_reports);
+    assert_eq!(uniques.len(), 79);
+}
+
+#[cfg(test)]
 fn get_sample_scanner_reports() -> HashMap<i32, ScannerReport> {
     parse_input(SAMPLE).expect("valid sample input")
 }
@@ -1206,7 +1202,6 @@ fn test_compute_overlaps() {
     let report2 = sample.get(&2).expect("test input should have scanner 2");
     let report3 = sample.get(&3).expect("test input should have scanner 3");
     let report4 = sample.get(&4).expect("test input should have scanner 4");
-    const MIN_OVERLAPS: usize = 12;
     let overlaps = report0.compute_overlaps(&report1, MIN_OVERLAPS);
     // There are two rotations which map report1 onto report0.  One is
     // a half-turn around axis 1, the other is a half-turn around both
@@ -1433,10 +1428,6 @@ fn parse_input(lines: &[&str]) -> Result<HashMap<i32, ScannerReport>, BadInput> 
     Ok(result)
 }
 
-fn solve1(_reports: &HashMap<i32, ScannerReport>) -> HashSet<Point> {
-    HashSet::new()
-}
-
 //#[test]
 //fn test_solve1() {
 //    const EXPECTED_BEACONS: &[&str] = &[
@@ -1535,7 +1526,7 @@ fn solve1(_reports: &HashMap<i32, ScannerReport>) -> HashSet<Point> {
 //}
 
 fn part1(reports: &HashMap<i32, ScannerReport>) {
-    let beacons = solve1(reports);
+    let beacons = unique_points(reports);
     println!("Day 19 part 1: {}", beacons.len());
 }
 
