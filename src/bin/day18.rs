@@ -48,7 +48,7 @@ fn find_explode_point(n: &SnailNum) -> Option<(usize, usize)> {
                 if let Some(start) = explode_start {
                     return Some((start, pos));
                 } else {
-                    depth = depth - 1;
+                    depth -= 1;
 		    if depth < -1 {
 			panic!("number has more ']' than '['");
 		    }
@@ -90,10 +90,7 @@ fn add_stringly_typed_number(s: &str, to_add: &str) -> String {
     match to_add.parse::<i32>() {
         Ok(to_add) => match s.parse::<i32>() {
             Ok(n) => {
-		let result = (n + to_add).to_string();
-		//println!("add_stringly_typed_number: {} + {} -> {}",
-		//	n, to_add, result);
-		result
+		(n + to_add).to_string()
 	    }
             Err(e) => {
                 panic!("'{}' is not a number: {}", s, e);
