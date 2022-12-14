@@ -221,11 +221,6 @@ fn parse_input(lines: &[&str]) -> Result<Vec<Instruction>, BadInstruction> {
     lines.iter().copied().map(Instruction::try_from).collect()
 }
 
-#[derive(Debug)]
-struct ArithmeticUnit {
-    registers: HashMap<Reg, Word>,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct BadProgram(String);
 
