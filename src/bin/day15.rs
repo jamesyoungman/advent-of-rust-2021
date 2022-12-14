@@ -119,9 +119,9 @@ fn neighbours(p: &Point, rows: usize, cols: usize) -> Vec<Point> {
     let (r, c) = (p.y, p.x);
     let mut result: Vec<Point> = Vec::with_capacity(4);
     let prev_col: Option<usize> = c.checked_sub(1);
-    let next_col: Option<usize> = c.checked_add(1).map(|val| clamp_range(val, cols)).flatten();
+    let next_col: Option<usize> = c.checked_add(1).and_then(|val| clamp_range(val, cols));
     let prev_row: Option<usize> = r.checked_sub(1);
-    let next_row: Option<usize> = r.checked_add(1).map(|val| clamp_range(val, rows)).flatten();
+    let next_row: Option<usize> = r.checked_add(1).and_then(|val| clamp_range(val, rows));
 
     // Neighbours are N, E, S, W.
     // We do not include NE, SE, SW, NW.

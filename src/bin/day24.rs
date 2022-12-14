@@ -235,7 +235,7 @@ impl Error for BadProgram {}
 mod nfa {
     use super::*;
 
-    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
+    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Copy, Default)]
     struct MaxMinDigit {
         bounds: Option<(i8, i8)>,
     }
@@ -268,12 +268,6 @@ mod nfa {
         }
     }
 
-    impl Default for MaxMinDigit {
-        fn default() -> Self {
-            Self { bounds: None }
-        }
-    }
-
     #[test]
     fn test_max_min_digit() {
         let mut m = MaxMinDigit::default();
@@ -287,7 +281,7 @@ mod nfa {
         assert_eq!(m.min_digit(), '2');
     }
 
-    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone)]
+    #[derive(PartialOrd, Ord, PartialEq, Eq, Clone, Default)]
     struct ModelNumberBounds {
         digits: [MaxMinDigit; 14],
     }
@@ -311,14 +305,6 @@ mod nfa {
                     self.digits[pos].update(lower);
                     self.digits[pos].update(upper);
                 }
-            }
-        }
-    }
-
-    impl Default for ModelNumberBounds {
-        fn default() -> ModelNumberBounds {
-            ModelNumberBounds {
-                digits: [MaxMinDigit::default(); 14],
             }
         }
     }

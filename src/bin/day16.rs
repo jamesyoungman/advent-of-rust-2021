@@ -430,14 +430,14 @@ fn packet_total_version(p: &Packet) -> u32 {
             subpackets,
         } => {
             let me: u32 = (*version).into();
-            let them: u32 = subpackets.iter().map(|p| packet_total_version(p)).sum();
+            let them: u32 = subpackets.iter().map(packet_total_version).sum();
             me + them
         }
     }
 }
 
 fn get_total_version(packets: &[Packet]) -> u32 {
-    packets.iter().map(|p| packet_total_version(p)).sum()
+    packets.iter().map(packet_total_version).sum()
 }
 
 fn gtv(s: &str) -> (u32, Vec<Packet>) {
@@ -660,7 +660,7 @@ fn main() {
             panic!("failed to read input: {}", e);
         }
     }
-    let no_newline: &str = input.strip_suffix('\n').unwrap_or_else(|| input.as_str());
+    let no_newline: &str = input.strip_suffix('\n').unwrap_or(input.as_str());
     part1(no_newline);
     part2(no_newline);
 }

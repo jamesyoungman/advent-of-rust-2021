@@ -207,7 +207,7 @@ fn main() {
             panic!("failed to read input: {}", e);
         }
     }
-    let no_newline: &str = input.strip_suffix('\n').unwrap_or_else(|| input.as_str());
+    let no_newline: &str = input.strip_suffix('\n').unwrap_or(input.as_str());
     match Target::try_from(no_newline) {
         Ok(t) => {
             part1(&t);

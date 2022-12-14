@@ -348,12 +348,7 @@ fn solve(samples: &[String]) -> Solution {
     // Segment f appears in the 2-segment digit (i.e. 1=cf) but not in
     // the same 5-segment digit as e.  This identifies f.
     let e = solution.scramble(&'e').unwrap();
-    let two_segment_sample: String = samples
-        .iter()
-        .filter(|s| s.len() == 2)
-        .cloned()
-        .next()
-        .unwrap();
+    let two_segment_sample: String = samples.iter().find(|s| s.len() == 2).cloned().unwrap();
     let scrambled_segment_in_same_5segment_digit_as_e = |scrambled_segment: char| -> bool {
         for sample in samples.iter().filter(|sample| sample.len() == 5) {
             if string_contains(sample.as_str(), &e)
